@@ -1,0 +1,66 @@
+name: Bug report
+description: Report a problem so it can be reproduced and fixed.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before submitting, check whether the issue already exists. Do not share cookies, tokens, private links, or personal information.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the problem and what you expected instead.
+      placeholder: A short, clear description.
+    validations:
+      required: true
+  - type: input
+    id: website
+    attributes:
+      label: Website or source type
+      description: Share the public domain only when safe. Never include private or signed URLs.
+      placeholder: example.com
+    validations:
+      required: false
+  - type: dropdown
+    id: browser
+    attributes:
+      label: Browser
+      options:
+        - Safari on iPhone/iPad
+        - Safari on Mac
+        - Chrome
+        - Firefox
+        - Edge
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: manager
+    attributes:
+      label: Userscript manager and version
+      placeholder: Tampermonkey / Violentmonkey / other
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: OPTDOWNS version
+      placeholder: 2.12.0
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the steps that cause the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics (optional)
+      description: Paste a sanitized diagnostic report. Remove private URLs, cookies, and tokens first.
+    validations:
+      required: false
