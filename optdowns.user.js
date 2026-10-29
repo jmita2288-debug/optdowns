@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         OPTDOWNS
 // @namespace    video-direct-downloader
-// @version      2.11.0
-// @description  OPTDOWNS: vídeo e áudio HLS locais, seleção de faixas, links públicos TikTok/Instagram, páginas com vários vídeos, logos dos sites, miniaturas confiáveis e painel para celular.
-// @description:en  OPTDOWNS: local HLS video and audio, track selection, public TikTok/Instagram links, multi-video pages, site logos, reliable thumbnails and a mobile-first panel.
+// @version      2.12.0
+// @description  OPTDOWNS: vídeo e áudio HLS locais, seleção de faixas, links públicos TikTok/Instagram, páginas com vários vídeos, logos dos sites, miniaturas confiáveis e painel para celular e interface em três idiomas.
+// @description:en  OPTDOWNS: local HLS video and audio, track selection, public TikTok/Instagram links, multi-video pages, site logos, reliable thumbnails and a mobile-first panel with a three-language interface.
 // @author       jmita2288-debug
 // @license      MIT
 // @homepageURL  https://github.com/jmita2288-debug/optdowns
@@ -65,7 +65,97 @@
   const LINK_PROXY = '';
   const LINK_PROXY_KEY = '';
   const LINK_PROXY_GENERIC = true;
-  const SCRIPT_VERSION = '2.11.0';
+  const SCRIPT_VERSION = '2.12.0';
+  const LANGUAGE_KEY = 'optdowns.language.v1';
+  const LANGUAGE_NAMES = Object.freeze({ 'pt-BR': 'Português (Brasil)', en: 'English', es: 'Español' });
+  const TRANSLATIONS = Object.freeze({
+    'DOWNLOADS NO NAVEGADOR': { en: 'DOWNLOADS IN YOUR BROWSER', es: 'DESCARGAS EN EL NAVEGADOR' },
+    'Abrir downloads': { en: 'Open downloads', es: 'Abrir descargas' },
+    'Baixar vídeos': { en: 'Download videos', es: 'Descargar videos' },
+    'Expandir em tela cheia': { en: 'Expand to full screen', es: 'Expandir a pantalla completa' },
+    'Recolher painel': { en: 'Collapse panel', es: 'Contraer panel' },
+    'Atualizar': { en: 'Refresh', es: 'Actualizar' },
+    'Diagnóstico e correção': { en: 'Diagnostics and fixes', es: 'Diagnóstico y correcciones' },
+    'Fechar': { en: 'Close', es: 'Cerrar' },
+    'Origem do vídeo': { en: 'Video source', es: 'Origen del video' },
+    'Nesta página': { en: 'On this page', es: 'En esta página' },
+    'Por link': { en: 'By link', es: 'Por enlace' },
+    'Sites': { en: 'Sites', es: 'Sitios' },
+    'Procurando mídia...': { en: 'Looking for media...', es: 'Buscando medios...' },
+    'Cole o link do vídeo ou da página': { en: 'Paste the video or page link', es: 'Pega el enlace del video o de la página' },
+    'Link do vídeo ou da página': { en: 'Video or page link', es: 'Enlace del video o de la página' },
+    'Limpar link': { en: 'Clear link', es: 'Borrar enlace' },
+    'Buscar': { en: 'Search', es: 'Buscar' },
+    'Colar link': { en: 'Paste link', es: 'Pegar enlace' },
+    'Limpar tudo': { en: 'Clear all', es: 'Borrar todo' },
+    'Cancelar busca': { en: 'Cancel search', es: 'Cancelar búsqueda' },
+    'TikTok, Instagram, arquivos de vídeo, playlists HLS e páginas com vários vídeos. A disponibilidade depende da fonte.': { en: 'TikTok, Instagram, video files, HLS playlists, and pages with multiple videos. Availability depends on the source.', es: 'TikTok, Instagram, archivos de video, listas HLS y páginas con varios videos. La disponibilidad depende de la fuente.' },
+    'Este vídeo': { en: 'This video', es: 'Este video' },
+    'Vídeos da página': { en: 'Videos on page', es: 'Videos de la página' },
+    'Verifica o OPTDOWNS neste dispositivo (gerenciador, conversor HLS, Worker) e explica os erros recentes com sugestões. Ele não altera outros scripts nem contorna login ou proteção dos sites.': { en: 'Checks OPTDOWNS on this device (userscript manager, HLS converter, Worker) and explains recent errors with suggestions. It does not modify other scripts or bypass site logins or protections.', es: 'Comprueba OPTDOWNS en este dispositivo (gestor de scripts, conversor HLS, Worker) y explica errores recientes con sugerencias. No modifica otros scripts ni evita inicios de sesión o protecciones de los sitios.' },
+    'Diagnosticar': { en: 'Run diagnostics', es: 'Diagnosticar' },
+    'Limpar e corrigir': { en: 'Clean and fix', es: 'Limpiar y corregir' },
+    'Copiar relatório': { en: 'Copy report', es: 'Copiar informe' },
+    'Iniciando OPTDOWNS': { en: 'Starting OPTDOWNS', es: 'Iniciando OPTDOWNS' },
+    'Preparando…': { en: 'Preparing…', es: 'Preparando…' },
+    'Fontes': { en: 'Sources', es: 'Fuentes' },
+    'Recentes': { en: 'Recent', es: 'Recientes' },
+    'Limpar': { en: 'Clear', es: 'Borrar' },
+    'Processamento local': { en: 'Local processing', es: 'Procesamiento local' },
+    'Escolha a qualidade antes de baixar': { en: 'Choose quality before downloading', es: 'Elige la calidad antes de descargar' },
+    'Configurações': { en: 'Settings', es: 'Configuración' },
+    'Idioma da interface': { en: 'Interface language', es: 'Idioma de la interfaz' },
+    'Escolha o idioma dos textos e controles do OPTDOWNS.': { en: 'Choose the language for OPTDOWNS text and controls.', es: 'Elige el idioma de los textos y controles de OPTDOWNS.' },
+    'A preferência fica salva neste navegador.': { en: 'Your preference is saved in this browser.', es: 'Tu preferencia se guarda en este navegador.' },
+    'Idioma atualizado': { en: 'Language updated', es: 'Idioma actualizado' },
+    'Nenhum vídeo encontrado ainda.': { en: 'No videos found yet.', es: 'Todavía no se encontraron videos.' },
+    'Inicie a reprodução e toque em atualizar.': { en: 'Start playback and tap refresh.', es: 'Inicia la reproducción y toca actualizar.' },
+    'Baixar por link': { en: 'Download by link', es: 'Descargar por enlace' },
+    'Fontes e links recentes': { en: 'Sources and recent links', es: 'Fuentes y enlaces recientes' },
+    'Lista atualizada': { en: 'List refreshed', es: 'Lista actualizada' },
+    'Relatório copiado': { en: 'Report copied', es: 'Informe copiado' },
+    'Toque e segure no campo para colar.': { en: 'Touch and hold the field to paste.', es: 'Mantén pulsado el campo para pegar.' },
+  });
+  function getLanguage() {
+    try { const saved = localStorage.getItem(LANGUAGE_KEY); if (saved && LANGUAGE_NAMES[saved]) return saved; } catch {}
+    return 'pt-BR';
+  }
+  function saveLanguage(language) {
+    const value = LANGUAGE_NAMES[language] ? language : 'pt-BR';
+    try { localStorage.setItem(LANGUAGE_KEY, value); } catch {}
+    return value;
+  }
+  function translateValue(value, language = getLanguage()) {
+    const raw = String(value ?? ''), trimmed = raw.trim();
+    if (!trimmed) return raw;
+    for (const [source, translations] of Object.entries(TRANSLATIONS)) {
+      if (trimmed === source || Object.values(translations).includes(trimmed)) {
+        const translated = language === 'pt-BR' ? source : (translations[language] || source);
+        return raw.replace(trimmed, translated);
+      }
+    }
+    return raw;
+  }
+  function applyLanguage(root = document.getElementById('vdd-root')) {
+    if (!root) return;
+    const language = getLanguage();
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      const translated = translateValue(node.nodeValue, language);
+      if (translated !== node.nodeValue) node.nodeValue = translated;
+    }
+    for (const element of root.querySelectorAll('*')) {
+      for (const attr of ['aria-label', 'title', 'placeholder']) {
+        if (element.hasAttribute(attr)) {
+          const value = element.getAttribute(attr), translated = translateValue(value, language);
+          if (translated !== value) element.setAttribute(attr, translated);
+        }
+      }
+    }
+    const selector = root.querySelector('#vdd-language');
+    if (selector && selector.value !== language) selector.value = language;
+  }
   const NET = Object.freeze({
     pageIdleTimeout: 90000,
     requestTimeout: 90000,
@@ -583,6 +673,12 @@
 #vdd-root .vdd-section { margin: 20px 0 9px; color: var(--quiet); font-size: 10px; font-weight: 720; letter-spacing: .12em; text-transform: uppercase; }
 
 #vdd-root .vdd-diag-intro { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+#vdd-root .vdd-settings-view { padding: 20px clamp(16px, 2vw, 24px) 28px; }
+#vdd-root .vdd-setting { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+#vdd-root .vdd-setting > span { display: grid; gap: 4px; }
+#vdd-root .vdd-setting b { color: var(--text); font-size: 13px; font-weight: 680; }
+#vdd-root .vdd-setting small { color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+#vdd-root .vdd-setting select { width: 100%; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--surface-raised); }
 #vdd-root .vdd-diag-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 #vdd-root .vdd-diag-actions button { display: flex; flex: 1 1 140px; min-height: 44px; align-items: center; justify-content: center; gap: 8px; padding: 7px 12px; color: var(--text); font-size: 12px; font-weight: 650; }
 #vdd-root .vdd-diag-actions button.vdd-primary { border: 1px solid transparent; border-radius: 8px; color: var(--accent-ink); background: var(--accent); }
@@ -810,6 +906,7 @@
           <button class="vdd-icon vdd-expand" id="vdd-expand" type="button" aria-label="Expandir em tela cheia" aria-pressed="true">${ic("expand","vdd-ico-out")}${ic("collapse","vdd-ico-in")}</button>
           <button class="vdd-icon" id="vdd-refresh" type="button" aria-label="Atualizar">${ic("refresh")}</button>
           <button class="vdd-icon" id="vdd-diag" type="button" aria-label="Diagnóstico e correção" aria-pressed="false">${ic("pulse")}</button>
+          <button class="vdd-icon" id="vdd-settings" type="button" aria-label="Configurações" aria-pressed="false">${ic("settings")}</button>
           <button class="vdd-icon" id="vdd-close" type="button" aria-label="Fechar">${ic("close")}</button>
         </div>
         <div class="vdd-tabs" role="tablist" aria-label="Origem do vídeo">
@@ -842,6 +939,18 @@
             <div class="vdd-tiles" id="vdd-tiles"></div>
             <div id="vdd-recents" hidden></div>
           </div>
+          <div class="vdd-view vdd-settings-view" id="vdd-settings-view" role="tabpanel" hidden>
+            <div class="vdd-section">Configurações</div>
+            <label class="vdd-setting" for="vdd-language">
+              <span><b>Idioma da interface</b><small>Escolha o idioma dos textos e controles do OPTDOWNS.</small></span>
+              <select id="vdd-language" aria-label="Idioma da interface">
+                <option value="pt-BR">Português (Brasil)</option>
+                <option value="en">English</option>
+                <option value="es">Español</option>
+              </select>
+            </label>
+            <p class="vdd-link-note">A preferência fica salva neste navegador.</p>
+          </div>
           <div class="vdd-view" id="vdd-diag-view" role="tabpanel" hidden>
             <p class="vdd-diag-intro">Verifica o OPTDOWNS neste dispositivo (gerenciador, conversor HLS, Worker) e explica os erros recentes com sugestões. Ele não altera outros scripts nem contorna login ou proteção dos sites.</p>
             <div class="vdd-diag-actions">
@@ -864,6 +973,9 @@
     `;
     document.documentElement.appendChild(root);
     new MutationObserver(() => { syncPageLock(); syncPanelClosing(); }).observe(document.getElementById('vdd-panel'), { attributes: true, attributeFilter: ['class'] });
+    const languageObserver = new MutationObserver(() => applyLanguage(root));
+    languageObserver.observe(root, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['aria-label', 'title', 'placeholder'] });
+    applyLanguage(root);
     layoutPanel();
     let layoutFrame = 0;
     const scheduleLayout = () => {
@@ -944,6 +1056,14 @@
     });
     document.getElementById('vdd-tab-sites').addEventListener('click', () => switchTab('sites'));
     document.getElementById('vdd-diag').addEventListener('click', () => switchTab(APP.activeTab === 'diag' ? 'page' : 'diag'));
+    document.getElementById('vdd-settings').addEventListener('click', () => switchTab(APP.activeTab === 'settings' ? 'page' : 'settings'));
+    document.getElementById('vdd-language').value = getLanguage();
+    document.getElementById('vdd-language').addEventListener('change', event => {
+      saveLanguage(event.currentTarget.value);
+      applyLanguage(root);
+      switchTab('settings');
+      toast(translateValue('Idioma atualizado'));
+    });
     document.getElementById('vdd-diag-run').addEventListener('click', runDiagnostics);
     document.getElementById('vdd-diag-fix').addEventListener('click', applySafeFixes);
     document.getElementById('vdd-diag-copy').addEventListener('click', copyDiagnostics);
@@ -969,9 +1089,9 @@
   }
 
   function switchTab(tab) {
-    const name = ['page', 'link', 'sites', 'diag'].includes(tab) ? tab : 'page';
+    const name = ['page', 'link', 'sites', 'diag', 'settings'].includes(tab) ? tab : 'page';
     APP.activeTab = name;
-    const views = { page: 'vdd-page-view', link: 'vdd-link-view', sites: 'vdd-sites-view', diag: 'vdd-diag-view' };
+    const views = { page: 'vdd-page-view', link: 'vdd-link-view', sites: 'vdd-sites-view', diag: 'vdd-diag-view', settings: 'vdd-settings-view' };
     for (const [key, id] of Object.entries(views)) { const view = document.getElementById(id); if (view) view.hidden = key !== name; }
     for (const key of ['page', 'link', 'sites']) {
       const element = document.getElementById(`vdd-tab-${key}`), on = key === name;
@@ -979,6 +1099,8 @@
     }
     const diagButton = document.getElementById('vdd-diag');
     diagButton?.classList.toggle('on', name === 'diag'); diagButton?.setAttribute('aria-pressed', String(name === 'diag'));
+    const settingsButton = document.getElementById('vdd-settings');
+    settingsButton?.classList.toggle('on', name === 'settings'); settingsButton?.setAttribute('aria-pressed', String(name === 'settings'));
     const refresh = document.getElementById('vdd-refresh');
     if (refresh) refresh.hidden = name !== 'page';
     const scroller = document.querySelector('#vdd-root .vdd-body'); if (scroller && name !== 'page') scroller.scrollTop = 0;
@@ -993,6 +1115,8 @@
     } else if (name === 'diag') {
       updateHeaderCount('Diagnóstico e correção');
       if (!APP.lastDiag) runDiagnostics();
+    } else if (name === 'settings') {
+      updateHeaderCount('Configurações');
     } else {
       render();
     }
@@ -7829,6 +7953,7 @@
   const ICON_PATHS = Object.freeze({
     download: '<path d="M12 4v11"/><path d="m7.5 11 4.5 4.5 4.5-4.5"/><path d="M5 19.5h14"/>',
     refresh: '<path d="M20 12a8 8 0 1 1-2.5-5.8"/><path d="M20 4.5v4.2h-4.2"/>',
+    settings: '<circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.6a7.7 7.7 0 0 1-1.6.9l-.3 1.8h-2.8l-.3-1.8a7.7 7.7 0 0 1-1.6-.9l-1.7.6-1.4-2.4 1.4-1.1a7 7 0 0 1 0-1.9l-1.4-1.1 1.4-2.4 1.7.6a7.7 7.7 0 0 1 1.6-.9l.3-1.8h2.8l.3 1.8a7.7 7.7 0 0 1 1.6.9l1.7-.6 1.4 2.4-1.4 1.1a7 7 0 0 1 0 1.8z"/>',
     close: '<path d="M6 6l12 12"/><path d="M18 6 6 18"/>',
     expand: '<path d="M9 4H6a2 2 0 0 0-2 2v3"/><path d="M15 4h3a2 2 0 0 1 2 2v3"/><path d="M9 20H6a2 2 0 0 1-2-2v-3"/><path d="M15 20h3a2 2 0 0 0 2-2v-3"/>',
     collapse: '<path d="M4 9h3a2 2 0 0 0 2-2V4"/><path d="M20 9h-3a2 2 0 0 1-2-2V4"/><path d="M4 15h3a2 2 0 0 1 2 2v3"/><path d="M20 15h-3a2 2 0 0 0-2 2v3"/>',
