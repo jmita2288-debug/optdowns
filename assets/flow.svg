@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 440" width="1200" height="440" role="img" aria-labelledby="t d">
+  <title id="t">How OPTDOWNS works</title>
+  <desc id="d">Detection, resolution, download, local processing with mux.js and saving. An optional Cloudflare Worker acts as a fallback.</desc>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M1 1l8 4-8 4z" fill="#a8f500"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="440" rx="18" fill="#0d1117"/>
+  <rect x="0.5" y="0.5" width="1199" height="439" rx="17.5" fill="none" stroke="#262c36"/>
+
+  <g font-family="Inter, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" text-anchor="middle">
+    <text x="600" y="48" font-size="22" font-weight="700" fill="#f4f5f2">How it works</text>
+
+    <g>
+      <rect x="40" y="90" width="190" height="130" rx="14" fill="#161b22" stroke="#30363d"/>
+      <text x="135" y="122" font-size="13" font-weight="700" fill="#a8f500" letter-spacing="1.5">1 · DETECT</text>
+      <text x="135" y="152" font-size="15" font-weight="600" fill="#f4f5f2">Page media</text>
+      <text x="135" y="176" font-size="12.5" fill="#8b949e">DOM, network hooks,</text>
+      <text x="135" y="194" font-size="12.5" fill="#8b949e">performance entries</text>
+    </g>
+
+    <g>
+      <rect x="262" y="90" width="190" height="130" rx="14" fill="#161b22" stroke="#30363d"/>
+      <text x="357" y="122" font-size="13" font-weight="700" fill="#a8f500" letter-spacing="1.5">2 · RESOLVE</text>
+      <text x="357" y="152" font-size="15" font-weight="600" fill="#f4f5f2">Sources and tracks</text>
+      <text x="357" y="176" font-size="12.5" fill="#8b949e">HLS master, DASH, direct</text>
+      <text x="357" y="194" font-size="12.5" fill="#8b949e">files, public links</text>
+    </g>
+
+    <g>
+      <rect x="484" y="90" width="190" height="130" rx="14" fill="#161b22" stroke="#30363d"/>
+      <text x="579" y="122" font-size="13" font-weight="700" fill="#a8f500" letter-spacing="1.5">3 · DOWNLOAD</text>
+      <text x="579" y="152" font-size="15" font-weight="600" fill="#f4f5f2">Resilient fetching</text>
+      <text x="579" y="176" font-size="12.5" fill="#8b949e">Range chunks, retries,</text>
+      <text x="579" y="194" font-size="12.5" fill="#8b949e">segment prefetch</text>
+    </g>
+
+    <g>
+      <rect x="706" y="90" width="190" height="130" rx="14" fill="#161b22" stroke="#30363d"/>
+      <text x="801" y="122" font-size="13" font-weight="700" fill="#a8f500" letter-spacing="1.5">4 · PROCESS</text>
+      <text x="801" y="152" font-size="15" font-weight="600" fill="#f4f5f2">Local transmux</text>
+      <text x="801" y="176" font-size="12.5" fill="#8b949e">mux.js in a Web Worker,</text>
+      <text x="801" y="194" font-size="12.5" fill="#8b949e">TS to MP4, audio pick</text>
+    </g>
+
+    <g>
+      <rect x="928" y="90" width="232" height="130" rx="14" fill="#161b22" stroke="#30363d"/>
+      <text x="1044" y="122" font-size="13" font-weight="700" fill="#a8f500" letter-spacing="1.5">5 · SAVE</text>
+      <text x="1044" y="152" font-size="15" font-weight="600" fill="#f4f5f2">Validated MP4</text>
+      <text x="1044" y="176" font-size="12.5" fill="#8b949e">Checked before saving,</text>
+      <text x="1044" y="194" font-size="12.5" fill="#8b949e">GM_download or blob</text>
+    </g>
+
+    <g stroke="#a8f500" stroke-width="2" fill="none">
+      <path d="M232 155h28" marker-end="url(#arr)"/>
+      <path d="M454 155h28" marker-end="url(#arr)"/>
+      <path d="M676 155h28" marker-end="url(#arr)"/>
+      <path d="M898 155h28" marker-end="url(#arr)"/>
+    </g>
+
+    <g>
+      <rect x="262" y="290" width="412" height="110" rx="14" fill="#161b22" stroke="#f6821f" stroke-dasharray="7 6"/>
+      <text x="468" y="322" font-size="13" font-weight="700" fill="#f6821f" letter-spacing="1.5">OPTIONAL FALLBACK</text>
+      <text x="468" y="352" font-size="15" font-weight="600" fill="#f4f5f2">Your own Cloudflare Worker</text>
+      <text x="468" y="376" font-size="12.5" fill="#8b949e">TikTok and allow-listed sites only. No DRM, no open proxy.</text>
+    </g>
+    <path d="M357 222v56" stroke="#f6821f" stroke-width="2" stroke-dasharray="6 5" fill="none"/>
+    <polygon points="350,276 364,276 357,290" fill="#f6821f"/>
+    <path d="M579 288v-56" stroke="#f6821f" stroke-width="2" stroke-dasharray="6 5" fill="none"/>
+    <polygon points="572,234 586,234 579,220" fill="#f6821f"/>
+    <text x="318" y="262" font-size="12" fill="#f6821f" text-anchor="end">if direct access fails</text>
+    <text x="620" y="262" font-size="12" fill="#f6821f" text-anchor="start">stream back</text>
+
+    <g>
+      <rect x="720" y="290" width="440" height="110" rx="14" fill="#161b22" stroke="#30363d"/>
+      <text x="940" y="322" font-size="13" font-weight="700" fill="#8b949e" letter-spacing="1.5">LOCAL BY DEFAULT</text>
+      <text x="940" y="352" font-size="15" font-weight="600" fill="#f4f5f2">No accounts, no analytics</text>
+      <text x="940" y="376" font-size="12.5" fill="#8b949e">Muxing and saving run locally in your browser.</text>
+    </g>
+  </g>
+</svg>

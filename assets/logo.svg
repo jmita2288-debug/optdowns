@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="OPTDOWNS logo">
+  <rect width="128" height="128" rx="30" fill="#a8f500"/>
+  <g fill="none" stroke="#121606" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M64 28v50"/>
+    <path d="M42 58l22 22 22-22"/>
+    <path d="M36 98h56"/>
+  </g>
+</svg>

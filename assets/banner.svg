@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-labelledby="t d">
+  <title id="t">OPTDOWNS</title>
+  <desc id="d">Userscript that downloads videos directly from the browser, with local HLS to MP4 processing.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b0d0a"/>
+      <stop offset="1" stop-color="#171d10"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.85" cy="0.2" r="0.7">
+      <stop offset="0" stop-color="#a8f500" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#a8f500" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="300" rx="20" fill="url(#bg)"/>
+  <rect width="1200" height="300" rx="20" fill="url(#glow)"/>
+  <rect x="0.5" y="0.5" width="1199" height="299" rx="19.5" fill="none" stroke="#2a3322"/>
+
+  <g fill="none" stroke="#a8f500" stroke-opacity="0.16" stroke-width="1.5">
+    <circle cx="1030" cy="150" r="60"/>
+    <circle cx="1030" cy="150" r="105"/>
+    <circle cx="1030" cy="150" r="150"/>
+  </g>
+
+  <g transform="translate(72 82)">
+    <rect width="136" height="136" rx="32" fill="#a8f500"/>
+    <g fill="none" stroke="#121606" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M68 30v53"/>
+      <path d="M45 61l23 23 23-23"/>
+      <path d="M38 104h60"/>
+    </g>
+  </g>
+
+  <g font-family="Inter, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
+    <text x="244" y="150" font-size="70" font-weight="800" letter-spacing="3" fill="#f4f5f2">OPTDOWNS</text>
+    <text x="246" y="196" font-size="26" font-weight="500" fill="#c3c9bd">Download videos straight from the browser</text>
+    <text x="246" y="236" font-size="19" font-weight="500" fill="#727970">HLS to MP4 · local processing · mobile-first panel · open source</text>
+  </g>
+</svg>

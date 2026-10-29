@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-label="OPTDOWNS social preview">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b0d0a"/>
+      <stop offset="1" stop-color="#171d10"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.1" r="0.8">
+      <stop offset="0" stop-color="#a8f500" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#a8f500" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#glow)"/>
+  <g fill="none" stroke="#a8f500" stroke-opacity="0.13" stroke-width="2">
+    <circle cx="640" cy="250" r="150"/>
+    <circle cx="640" cy="250" r="230"/>
+    <circle cx="640" cy="250" r="310"/>
+  </g>
+  <g transform="translate(560 130)">
+    <rect width="160" height="160" rx="38" fill="#a8f500"/>
+    <g fill="none" stroke="#121606" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M80 36v62"/>
+      <path d="M53 72l27 27 27-27"/>
+      <path d="M45 122h70"/>
+    </g>
+  </g>
+  <g font-family="Inter, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" text-anchor="middle">
+    <text x="640" y="400" font-size="92" font-weight="800" letter-spacing="4" fill="#f4f5f2">OPTDOWNS</text>
+    <text x="640" y="462" font-size="34" font-weight="500" fill="#c3c9bd">Download videos straight from the browser</text>
+    <text x="640" y="520" font-size="24" font-weight="500" fill="#727970">HLS to MP4 · local processing · mobile-first · MIT</text>
+  </g>
+</svg>
