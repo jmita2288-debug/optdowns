@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-a8f500?style=flat-square"></a>
-  <img alt="Version 2.11.0" src="https://img.shields.io/badge/version-2.11.0-2ea043?style=flat-square">
+  <img alt="Version 2.12.0" src="https://img.shields.io/badge/version-2.12.0-2ea043?style=flat-square">
   <img alt="Userscript" src="https://img.shields.io/badge/userscript-GM%20API-0d1117?style=flat-square">
   <img alt="mux.js 6.3.0" src="https://img.shields.io/badge/mux.js-6.3.0-7c6cf0?style=flat-square">
   <img alt="Cloudflare Workers (optional)" src="https://img.shields.io/badge/Cloudflare%20Workers-optional-f6821f?style=flat-square">
@@ -16,11 +16,11 @@
 
 ---
 
-OPTDOWNS is a userscript that finds the videos on the page you are browsing and saves them as regular MP4 files. It works without a server: HLS streams are downloaded segment by segment and converted to MP4 inside your browser, using [mux.js](https://github.com/videojs/mux.js).
+**OPTDOWNS** is a free, open-source browser userscript for detecting and downloading videos. It helps save direct video files and HLS/M3U8 streams as MP4, processing media locally in your browser with [mux.js](https://github.com/videojs/mux.js) without requiring your own server.
 
-It was built for phones first, so the panel is touch friendly and the save flow takes the quirks of iOS Safari into account. On desktop it behaves the same way.
+It was designed for phones, including the iPhone Safari save flow, and also supports desktop browsers. Compatibility depends on the source website, browser, and userscript manager.
 
-> The interface is currently in Brazilian Portuguese. Translations are welcome, see [Contributing](#contributing).
+> The interface has a language selector for Brazilian Portuguese, English, and Spanish. Some messages may still appear in Portuguese; contributions to improve translations are welcome. See [Contributing](#contributing).
 
 ## Contents
 
