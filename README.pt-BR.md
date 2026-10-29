@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="Licença: MIT" src="https://img.shields.io/badge/licen%C3%A7a-MIT-a8f500?style=flat-square"></a>
-  <img alt="Versão 2.11.0" src="https://img.shields.io/badge/vers%C3%A3o-2.11.0-2ea043?style=flat-square">
+  <img alt="Versão 2.12.0" src="https://img.shields.io/badge/vers%C3%A3o-2.12.0-2ea043?style=flat-square">
   <img alt="Userscript" src="https://img.shields.io/badge/userscript-GM%20API-0d1117?style=flat-square">
   <img alt="mux.js 6.3.0" src="https://img.shields.io/badge/mux.js-6.3.0-7c6cf0?style=flat-square">
   <img alt="Cloudflare Workers (opcional)" src="https://img.shields.io/badge/Cloudflare%20Workers-opcional-f6821f?style=flat-square">
@@ -16,9 +16,9 @@
 
 ---
 
-O OPTDOWNS é um userscript que encontra os vídeos da página em que você está e salva cada um como um arquivo MP4 comum. Ele funciona sem servidor: os streams HLS são baixados segmento por segmento e convertidos para MP4 dentro do próprio navegador, com o [mux.js](https://github.com/videojs/mux.js).
+O **OPTDOWNS** é um userscript gratuito e de código aberto para detectar e baixar vídeos pelo navegador. Ele ajuda a salvar arquivos de vídeo diretos e streams HLS/M3U8 como MP4, com processamento local no navegador usando [mux.js](https://github.com/videojs/mux.js), sem exigir um servidor próprio.
 
-Ele foi pensado primeiro para o celular. O painel é feito para toque e o fluxo de salvamento leva em conta as particularidades do Safari no iOS. No computador, o comportamento é o mesmo.
+Foi pensado primeiro para celulares, incluindo o fluxo de salvamento do Safari no iPhone, e também funciona em navegadores de computador. A compatibilidade depende do site, do navegador e do gerenciador de userscripts.
 
 ## Índice
 
