@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         OPTDOWNS
 // @namespace    video-direct-downloader
-// @version      2.12.0
-// @description  OPTDOWNS: vídeo e áudio HLS locais, seleção de faixas, links públicos TikTok/Instagram, páginas com vários vídeos, logos dos sites, miniaturas confiáveis e painel para celular e interface em três idiomas.
-// @description:en  OPTDOWNS: local HLS video and audio, track selection, public TikTok/Instagram links, multi-video pages, site logos, reliable thumbnails and a mobile-first panel with a three-language interface.
+// @version      2.13.0
+// @description  OPTDOWNS: vídeo (HD), fotos, áudio e MP3 de TikTok/Instagram, vídeos e Shorts do YouTube (via seu Worker + Cobalt), vídeo e áudio HLS locais, seleção de faixas, páginas com vários vídeos, botão e painel móveis (arraste) e painel para celular.
+// @description:en  OPTDOWNS: video (HD), photos, audio and MP3 from TikTok/Instagram, YouTube videos and Shorts (via your own Worker and Cobalt), local HLS video and audio, track selection, multi-video pages and a draggable mobile-first panel.
 // @author       jmita2288-debug
 // @license      MIT
 // @homepageURL  https://github.com/jmita2288-debug/optdowns
@@ -18,14 +18,23 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
 // @grant        GM_openInTab
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM.getValue
+// @grant        GM.setValue
 // @grant        unsafeWindow
 // @connect      *
 // @require      https://unpkg.com/mux.js@6.3.0/dist/mux.js
+// @require      https://unpkg.com/lamejs@1.2.1/lame.min.js
 // ==/UserScript==
 
 (() => {
   'use strict';
 
+  // ---------------------------------------------------------------------------
+  // State
+  // Shared runtime state: detected media, HLS caches and controllers for the link and download flows.
+  // ---------------------------------------------------------------------------
   const APP = {
     hlsUrls: new Set(),
     hlsMasters: new Map(),
@@ -61,101 +70,22 @@
   Object.assign(APP, { navGen: 0, navAt: 0, perfSeen: 0, dropped: new Map(), activeVideoKey: '', activeAt: 0,
     expandedGroups: new Set(), directController: null, eventScanTimer: null });
 
-  // Optional: URL of your own Cloudflare Worker (see worker/README.md). Leave empty to disable.
+  // ---------------------------------------------------------------------------
+  // Configuration
+  // Optional Worker settings. See worker/README.md. With LINK_PROXY empty, everything stays in the browser.
+  // ---------------------------------------------------------------------------
+  // Address of your own Cloudflare Worker. Empty disables it.
   const LINK_PROXY = '';
+  // Same value as the Worker's SECRET, only if you set one.
   const LINK_PROXY_KEY = '';
+  // Let non-TikTok sites use the Worker as a last resort. false keeps other sites off the Worker.
   const LINK_PROXY_GENERIC = true;
-  const SCRIPT_VERSION = '2.12.0';
-  const LANGUAGE_KEY = 'optdowns.language.v1';
-  const LANGUAGE_NAMES = Object.freeze({ 'pt-BR': 'Português (Brasil)', en: 'English', es: 'Español' });
-  const TRANSLATIONS = Object.freeze({
-    'DOWNLOADS NO NAVEGADOR': { en: 'DOWNLOADS IN YOUR BROWSER', es: 'DESCARGAS EN EL NAVEGADOR' },
-    'Abrir downloads': { en: 'Open downloads', es: 'Abrir descargas' },
-    'Baixar vídeos': { en: 'Download videos', es: 'Descargar videos' },
-    'Expandir em tela cheia': { en: 'Expand to full screen', es: 'Expandir a pantalla completa' },
-    'Recolher painel': { en: 'Collapse panel', es: 'Contraer panel' },
-    'Atualizar': { en: 'Refresh', es: 'Actualizar' },
-    'Diagnóstico e correção': { en: 'Diagnostics and fixes', es: 'Diagnóstico y correcciones' },
-    'Fechar': { en: 'Close', es: 'Cerrar' },
-    'Origem do vídeo': { en: 'Video source', es: 'Origen del video' },
-    'Nesta página': { en: 'On this page', es: 'En esta página' },
-    'Por link': { en: 'By link', es: 'Por enlace' },
-    'Sites': { en: 'Sites', es: 'Sitios' },
-    'Procurando mídia...': { en: 'Looking for media...', es: 'Buscando medios...' },
-    'Cole o link do vídeo ou da página': { en: 'Paste the video or page link', es: 'Pega el enlace del video o de la página' },
-    'Link do vídeo ou da página': { en: 'Video or page link', es: 'Enlace del video o de la página' },
-    'Limpar link': { en: 'Clear link', es: 'Borrar enlace' },
-    'Buscar': { en: 'Search', es: 'Buscar' },
-    'Colar link': { en: 'Paste link', es: 'Pegar enlace' },
-    'Limpar tudo': { en: 'Clear all', es: 'Borrar todo' },
-    'Cancelar busca': { en: 'Cancel search', es: 'Cancelar búsqueda' },
-    'TikTok, Instagram, arquivos de vídeo, playlists HLS e páginas com vários vídeos. A disponibilidade depende da fonte.': { en: 'TikTok, Instagram, video files, HLS playlists, and pages with multiple videos. Availability depends on the source.', es: 'TikTok, Instagram, archivos de video, listas HLS y páginas con varios videos. La disponibilidad depende de la fuente.' },
-    'Este vídeo': { en: 'This video', es: 'Este video' },
-    'Vídeos da página': { en: 'Videos on page', es: 'Videos de la página' },
-    'Verifica o OPTDOWNS neste dispositivo (gerenciador, conversor HLS, Worker) e explica os erros recentes com sugestões. Ele não altera outros scripts nem contorna login ou proteção dos sites.': { en: 'Checks OPTDOWNS on this device (userscript manager, HLS converter, Worker) and explains recent errors with suggestions. It does not modify other scripts or bypass site logins or protections.', es: 'Comprueba OPTDOWNS en este dispositivo (gestor de scripts, conversor HLS, Worker) y explica errores recientes con sugerencias. No modifica otros scripts ni evita inicios de sesión o protecciones de los sitios.' },
-    'Diagnosticar': { en: 'Run diagnostics', es: 'Diagnosticar' },
-    'Limpar e corrigir': { en: 'Clean and fix', es: 'Limpiar y corregir' },
-    'Copiar relatório': { en: 'Copy report', es: 'Copiar informe' },
-    'Iniciando OPTDOWNS': { en: 'Starting OPTDOWNS', es: 'Iniciando OPTDOWNS' },
-    'Preparando…': { en: 'Preparing…', es: 'Preparando…' },
-    'Fontes': { en: 'Sources', es: 'Fuentes' },
-    'Recentes': { en: 'Recent', es: 'Recientes' },
-    'Limpar': { en: 'Clear', es: 'Borrar' },
-    'Processamento local': { en: 'Local processing', es: 'Procesamiento local' },
-    'Escolha a qualidade antes de baixar': { en: 'Choose quality before downloading', es: 'Elige la calidad antes de descargar' },
-    'Configurações': { en: 'Settings', es: 'Configuración' },
-    'Idioma da interface': { en: 'Interface language', es: 'Idioma de la interfaz' },
-    'Escolha o idioma dos textos e controles do OPTDOWNS.': { en: 'Choose the language for OPTDOWNS text and controls.', es: 'Elige el idioma de los textos y controles de OPTDOWNS.' },
-    'A preferência fica salva neste navegador.': { en: 'Your preference is saved in this browser.', es: 'Tu preferencia se guarda en este navegador.' },
-    'Idioma atualizado': { en: 'Language updated', es: 'Idioma actualizado' },
-    'Nenhum vídeo encontrado ainda.': { en: 'No videos found yet.', es: 'Todavía no se encontraron videos.' },
-    'Inicie a reprodução e toque em atualizar.': { en: 'Start playback and tap refresh.', es: 'Inicia la reproducción y toca actualizar.' },
-    'Baixar por link': { en: 'Download by link', es: 'Descargar por enlace' },
-    'Fontes e links recentes': { en: 'Sources and recent links', es: 'Fuentes y enlaces recientes' },
-    'Lista atualizada': { en: 'List refreshed', es: 'Lista actualizada' },
-    'Relatório copiado': { en: 'Report copied', es: 'Informe copiado' },
-    'Toque e segure no campo para colar.': { en: 'Touch and hold the field to paste.', es: 'Mantén pulsado el campo para pegar.' },
-  });
-  function getLanguage() {
-    try { const saved = localStorage.getItem(LANGUAGE_KEY); if (saved && LANGUAGE_NAMES[saved]) return saved; } catch {}
-    return 'pt-BR';
-  }
-  function saveLanguage(language) {
-    const value = LANGUAGE_NAMES[language] ? language : 'pt-BR';
-    try { localStorage.setItem(LANGUAGE_KEY, value); } catch {}
-    return value;
-  }
-  function translateValue(value, language = getLanguage()) {
-    const raw = String(value ?? ''), trimmed = raw.trim();
-    if (!trimmed) return raw;
-    for (const [source, translations] of Object.entries(TRANSLATIONS)) {
-      if (trimmed === source || Object.values(translations).includes(trimmed)) {
-        const translated = language === 'pt-BR' ? source : (translations[language] || source);
-        return raw.replace(trimmed, translated);
-      }
-    }
-    return raw;
-  }
-  function applyLanguage(root = document.getElementById('vdd-root')) {
-    if (!root) return;
-    const language = getLanguage();
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    let node;
-    while ((node = walker.nextNode())) {
-      const translated = translateValue(node.nodeValue, language);
-      if (translated !== node.nodeValue) node.nodeValue = translated;
-    }
-    for (const element of root.querySelectorAll('*')) {
-      for (const attr of ['aria-label', 'title', 'placeholder']) {
-        if (element.hasAttribute(attr)) {
-          const value = element.getAttribute(attr), translated = translateValue(value, language);
-          if (translated !== value) element.setAttribute(attr, translated);
-        }
-      }
-    }
-    const selector = root.querySelector('#vdd-language');
-    if (selector && selector.value !== language) selector.value = language;
-  }
+  // YouTube videos and Shorts through your Worker and your own Cobalt instance. false disables YouTube.
+  const LINK_PROXY_YOUTUBE = true;
+  // true asks Cobalt for each option's size while searching (more requests to Cobalt).
+  const LINK_PROXY_YOUTUBE_SIZES = false;
+  const SCRIPT_VERSION = '2.13.0';
+  // Network timeouts, retry count and the Range chunk size.
   const NET = Object.freeze({
     pageIdleTimeout: 90000,
     requestTimeout: 90000,
@@ -169,6 +99,10 @@
     maxLinkHtmlSize: 12 * 1024 * 1024,
   });
 
+  // ---------------------------------------------------------------------------
+  // Styles
+  // Panel CSS, injected once into the page.
+  // ---------------------------------------------------------------------------
   const CSS = `
 #vdd-root {
   all: initial;
@@ -188,11 +122,14 @@
   --accent: #a8f500;
   --accent-ink: #121606;
   --danger: #e9847a;
-  --brand-image: url("https://hebbkx1anhila5yf.public.blob.vercel-storage.com/BF5D51E4-BE58-4333-9D33-F91463487117-bkNO4Xwi9KhwGj0MCZAY9A69ZnyOMI.png");
   --ease-out: cubic-bezier(.22, 1, .36, 1);
   --ic-dl: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 4v11'/%3E%3Cpath d='m7 11 5 5 5-5'/%3E%3Cpath d='M5 20h14'/%3E%3C/svg%3E");
   --ic-spin: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round'%3E%3Cpath d='M12 3a9 9 0 1 0 9 9'/%3E%3C/svg%3E");
   --ic-vid: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'%3E%3Cpath d='M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 5 17.5zm5.2 2.1v6.8a.6.6 0 0 0 .9.5l5.2-3.4a.6.6 0 0 0 0-1l-5.2-3.4a.6.6 0 0 0-.9.5z' fill-rule='evenodd'/%3E%3C/svg%3E");
+  --ic-note: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 18V6l10-2v12'/%3E%3Ccircle cx='6.5' cy='18' r='2.5'/%3E%3Ccircle cx='16.5' cy='16' r='2.5'/%3E%3C/svg%3E");
+  --ic-img: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.5' y='4.5' width='17' height='15' rx='3.2'/%3E%3Ccircle cx='9' cy='10' r='1.6'/%3E%3Cpath d='m4.5 17.5 4.7-4.6 3.3 3.2 2.6-2.5 4.4 3.9'/%3E%3C/svg%3E");
+  --ic-zip: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 8.5 12 4l8 4.5v7L12 20l-8-4.5z'/%3E%3Cpath d='m4 8.5 8 4.5 8-4.5'/%3E%3Cpath d='M12 13v7'/%3E%3C/svg%3E");
+  --ic-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 12.5 4.5 4.5L19 7.5'/%3E%3C/svg%3E");
   --ic-chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ebebf5' stroke-opacity='.6' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 10 5 5 5-5'/%3E%3C/svg%3E");
 }
 
@@ -223,38 +160,50 @@
   padding: 0;
   overflow: hidden;
   isolation: isolate;
-  border: 1px solid rgba(168, 245, 0, .65);
-  border-radius: 17px;
+  border: 1px solid rgba(168, 245, 0, .55);
+  border-radius: 18px;
   color: var(--accent);
-  background: #050607;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, .42), 0 0 0 1px rgba(168, 245, 0, .08), inset 0 1px 0 rgba(255, 255, 255, .08);
-  transition: transform .2s var(--ease-out), border-color .2s, background .2s, box-shadow .2s;
+  background:
+    radial-gradient(120% 120% at 20% 0%, rgba(168, 245, 0, .20), transparent 55%),
+    linear-gradient(160deg, #161b0c 0%, #090b06 100%);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .46), 0 0 0 1px rgba(168, 245, 0, .08), inset 0 1px 0 rgba(255, 255, 255, .10);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform .22s var(--ease-out), border-color .2s, background .2s, box-shadow .25s;
 }
-#vdd-open:active { transform: scale(.95); }
 #vdd-open::before {
   position: absolute;
-  inset: 1px;
+  inset: 0;
   z-index: 0;
   border-radius: inherit;
-  background: var(--brand-image) center / cover no-repeat;
+  background: conic-gradient(from 210deg, transparent 0 55%, rgba(168, 245, 0, .30) 80%, transparent);
   content: "";
+  opacity: 0;
   pointer-events: none;
-  transition: transform .24s var(--ease-out);
+  transition: opacity .3s ease;
 }
-#vdd-open > svg { position: relative; z-index: 1; display: block; width: 46px; height: 46px; overflow: visible; }
-#vdd-open .vdd-arrow,
-#vdd-open > svg > path:last-child { opacity: 0; }
-#vdd-root .vdd-logo svg { display: block; width: 25px; height: 25px; overflow: visible; opacity: 0; }
-#vdd-root .vdd-ring { opacity: 0; color: var(--accent); }
-#vdd-root .vdd-arrow { color: var(--accent); }
-#vdd-root:has(.vdd-btn:disabled, #vdd-link-submit:disabled) #vdd-open { border-color: var(--accent); background: #11170a; box-shadow: 0 8px 30px rgba(0, 0, 0, .48), 0 0 0 2px rgba(168, 245, 0, .16); }
-#vdd-root:has(.vdd-btn:disabled, #vdd-link-submit:disabled) #vdd-open .vdd-ring { opacity: .9; }
+#vdd-open > svg { position: relative; z-index: 1; display: block; width: 34px; height: 34px; overflow: visible; pointer-events: none; }
+#vdd-open.vdd-dragging { cursor: grabbing; transform: scale(1.1); border-color: var(--accent); box-shadow: 0 18px 40px rgba(0, 0, 0, .55), 0 0 0 3px rgba(168, 245, 0, .18); transition: transform .18s var(--ease-out), box-shadow .2s; }
+#vdd-open.vdd-snapping { transition: left .34s var(--ease-out), top .34s var(--ease-out), transform .22s var(--ease-out), border-color .2s, box-shadow .25s; }
+#vdd-open:active:not(.vdd-dragging) { transform: scale(.94); }
+#vdd-root .vdd-ring { opacity: 0; color: var(--accent); transform-origin: 16px 16px; transition: opacity .25s ease; }
+#vdd-root .vdd-arrow,
+#vdd-root .vdd-tray { color: var(--accent); }
+#vdd-root .vdd-arrow { transition: transform .3s var(--ease-out); }
+#vdd-root:has(.vdd-btn:disabled, #vdd-link-submit:disabled) #vdd-open { border-color: var(--accent); box-shadow: 0 10px 30px rgba(0, 0, 0, .5), 0 0 0 3px rgba(168, 245, 0, .16), 0 0 26px rgba(168, 245, 0, .22); }
+#vdd-root:has(.vdd-btn:disabled, #vdd-link-submit:disabled) #vdd-open::before { opacity: 1; animation: vdd-orbit 1.6s linear infinite; }
+#vdd-root:has(.vdd-btn:disabled, #vdd-link-submit:disabled) #vdd-open .vdd-ring { opacity: 1; animation: vdd-orbit 1.15s linear infinite; }
+#vdd-root:has(.vdd-btn:disabled, #vdd-link-submit:disabled) #vdd-open .vdd-arrow { animation: vdd-bob 1.1s ease-in-out infinite; }
 
 #vdd-panel {
   position: fixed;
   z-index: 2147483647;
-  top: max(8px, var(--vdd-ct, 72px));
-  left: max(8px, var(--vdd-cl, 8px));
+  top: var(--vdd-pt, max(8px, var(--vdd-ct, 72px)));
+  left: var(--vdd-pl, max(8px, var(--vdd-cl, 8px)));
   display: none;
   flex-direction: column;
   width: min(var(--vdd-cw, 480px), calc(100vw - 16px));
@@ -308,12 +257,19 @@
 #vdd-root .vdd-footer { position: relative; z-index: 1; }
 
 #vdd-root .vdd-head {
+  position: relative;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   gap: clamp(7px, 1vw, 11px);
   padding: 17px clamp(16px, 2vw, 24px) 14px;
 }
+#vdd-root .vdd-grip { position: absolute; top: 6px; left: 50%; display: none; width: 38px; height: 4px; border-radius: 99px; background: rgba(255, 255, 255, .16); transform: translateX(-50%); pointer-events: none; }
+#vdd-panel:not(.vdd-full) .vdd-grip { display: block; }
+#vdd-panel:not(.vdd-full) .vdd-head { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; padding-top: 21px; }
+#vdd-panel:not(.vdd-full) .vdd-head button { cursor: pointer; touch-action: manipulation; }
+#vdd-panel.vdd-dragging { cursor: grabbing; transition: none !important; animation: none !important; box-shadow: 0 30px 70px rgba(0, 0, 0, .55), 0 0 0 1px rgba(168, 245, 0, .22); }
+#vdd-panel.vdd-dragging .vdd-head { cursor: grabbing; }
 #vdd-root .vdd-logo {
   display: grid;
   flex: 0 0 auto;
@@ -324,13 +280,12 @@
   border: 1px solid var(--line);
   border-radius: 12px;
   color: var(--accent);
-  background-color: #050607;
-  background-image: var(--brand-image);
-  background-position: center;
-  background-size: cover;
-  background-repeat: no-repeat;
+  background:
+    radial-gradient(120% 120% at 20% 0%, rgba(168, 245, 0, .20), transparent 55%),
+    linear-gradient(160deg, #161b0c 0%, #090b06 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
 }
-#vdd-root .vdd-logo svg { width: 25px; height: 25px; }
+#vdd-root .vdd-logo svg { display: block; width: 28px; height: 28px; overflow: visible; }
 #vdd-root .vdd-head-main { flex: 1 1 auto; min-width: 0; }
 #vdd-root .vdd-eyebrow { margin-bottom: 3px; color: var(--quiet); font-size: 9px; font-weight: 700; letter-spacing: .14em; }
 #vdd-root .vdd-title { color: var(--text); font-size: clamp(18px, 2.4vw, 22px); font-weight: 760; letter-spacing: -.045em; line-height: 1.1; white-space: nowrap; }
@@ -479,11 +434,17 @@
   color: var(--accent-ink);
   background: var(--accent);
   font-size: 13px;
-  font-weight: 720;
-  transition: transform .16s var(--ease-out), background .16s ease, opacity .16s ease;
+  font-weight: 760;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background: linear-gradient(180deg, #c9ff45 0%, var(--accent) 55%, #8dd400 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 8px 18px -10px rgba(168, 245, 0, .6);
+  transition: transform .2s var(--ease-out), background .2s ease, opacity .2s ease, box-shadow .2s ease;
 }
 #vdd-root .vdd-link-btn:active:not(:disabled) { transform: scale(.97); }
-#vdd-root .vdd-link-btn:disabled { opacity: .55; }
+#vdd-root .vdd-link-btn:disabled { opacity: .85; cursor: progress; }
+#vdd-root .vdd-link-btn:disabled::before { display: inline-block; width: 13px; height: 13px; margin-right: 7px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; content: ""; vertical-align: -2px; animation: vdd-button-spin .7s linear infinite; }
 #vdd-root .vdd-input-clear {
   position: absolute;
   top: 50%;
@@ -511,6 +472,9 @@
 #vdd-root .vdd-link-note { margin: 8px 0 0; }
 #vdd-root .vdd-link-status { margin-top: 12px; }
 #vdd-root .vdd-link-status:empty { display: none; }
+#vdd-root .vdd-link-status[data-state="loading"] { display: flex; align-items: center; gap: 10px; padding: 11px 13px; border: 1px solid rgba(168, 245, 0, .22); border-radius: 11px; color: var(--text); background: linear-gradient(90deg, rgba(168, 245, 0, .08), rgba(168, 245, 0, .02)); }
+#vdd-root .vdd-link-status[data-state="loading"]::before { flex: 0 0 auto; width: 16px; height: 16px; border: 2.5px solid rgba(168, 245, 0, .28); border-top-color: var(--accent); border-radius: 50%; content: ""; animation: vdd-button-spin .7s linear infinite; }
+#vdd-root .vdd-link-status[data-state="complete"], #vdd-root .vdd-link-status[data-state="error"] { animation: vdd-rise .3s var(--ease-out) both; }
 #vdd-root [data-state="error"] { color: var(--danger); }
 #vdd-root [data-state="complete"] { color: var(--accent); }
 #vdd-root .vdd-link-seg { display: flex; gap: 3px; margin-top: 14px; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: #141617; }
@@ -578,8 +542,8 @@
 }
 #vdd-root .vdd-source { display: flex; min-width: 0; align-items: center; gap: 7px; margin-top: 7px; color: var(--muted); font-size: 11.5px; line-height: 1.3; }
 #vdd-root .vdd-source > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#vdd-root .vdd-site { display: block; flex: 0 0 auto; width: 17px; height: 17px; border-radius: 4px; object-fit: contain; }
-#vdd-root .vdd-site.big { width: 28px; height: 28px; border-radius: 7px; }
+#vdd-root .vdd-site { display: block; flex: 0 0 auto; width: 17px; height: 17px; min-width: 17px; max-width: 17px; min-height: 17px; max-height: 17px; border-radius: 5px; object-fit: contain; }
+#vdd-root .vdd-site.big { width: 30px; height: 30px; min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px; border-radius: 9px; }
 #vdd-root canvas.vdd-site-logo { object-fit: contain; }
 #vdd-root .vdd-meta-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
 #vdd-root .vdd-badge,
@@ -601,47 +565,83 @@
 #vdd-root .vdd-quality-wrap { padding: 0 15px 12px; }
 #vdd-root .vdd-field-label { display: block; margin: 0 0 10px; color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .01em; }
 #vdd-root .vdd-quality,
+#vdd-root .vdd-yt-quality,
 #vdd-root .vdd-audio { display: block; width: 100%; min-width: 0; min-height: 44px; margin-top: 6px; padding: 9px 36px 9px 11px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--surface-raised) var(--ic-chev) no-repeat right 10px center / 16px; font-size: 13px; -webkit-appearance: none; appearance: none; }
 #vdd-root .vdd-silent-label { display: flex; min-height: 42px; align-items: center; gap: 9px; color: var(--muted); font-size: 11.5px; cursor: pointer; }
 #vdd-root .vdd-allow-silent { width: 17px; height: 17px; flex: 0 0 auto; margin: 0; accent-color: var(--accent); }
 #vdd-root .vdd-quality-note { margin: 6px 0; }
+#vdd-root .vdd-yt-quality:disabled { opacity: .55; cursor: progress; }
+#vdd-root .vdd-yt-quality optgroup { color: var(--muted); font-style: normal; }
+#vdd-root .vdd-yt-note { margin: 8px 0 0; font-size: 11.5px; }
+#vdd-root .vdd-yt-skel { display: flex; gap: 12px; padding: 15px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-raised); animation: vdd-rise .3s var(--ease-out) both; }
+#vdd-root .vdd-yt-skel-thumb { flex: 0 0 38%; max-width: 168px; aspect-ratio: 16 / 9; border-radius: 9px; }
+#vdd-root .vdd-yt-skel-lines { flex: 1 1 auto; display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
+#vdd-root .vdd-yt-skel-lines i { display: block; height: 12px; border-radius: 6px; }
+#vdd-root .vdd-yt-skel-lines i:nth-child(1) { width: 92%; } #vdd-root .vdd-yt-skel-lines i:nth-child(2) { width: 64%; } #vdd-root .vdd-yt-skel-lines i:nth-child(3) { width: 38%; height: 20px; }
+#vdd-root .vdd-yt-skel-thumb, #vdd-root .vdd-yt-skel-lines i { background: linear-gradient(100deg, var(--surface-high) 30%, rgba(255, 255, 255, .11) 50%, var(--surface-high) 70%) 0 0 / 220% 100%; animation: vdd-yt-shimmer 1.25s linear infinite; }
+@keyframes vdd-yt-shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+@media (prefers-reduced-motion: reduce) { #vdd-root .vdd-yt-skel-thumb, #vdd-root .vdd-yt-skel-lines i { animation: none; } }
 #vdd-root .vdd-quality-refresh,
 #vdd-root .vdd-cancel,
 #vdd-root .vdd-ghost { min-height: 42px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--surface-raised); font-size: 12px; font-weight: 620; transition: border-color .16s ease, color .16s ease, background .16s ease, transform .16s var(--ease-out); }
 #vdd-root .vdd-quality-refresh { width: 100%; margin-top: 8px; }
+#vdd-root :is(.vdd-btn, .vdd-link-btn, .vdd-primary, .vdd-tile, .vdd-chip, .vdd-quality-refresh) { position: relative; overflow: hidden; }
+#vdd-root .vdd-ripple { position: absolute; z-index: 0; border-radius: 50%; background: currentColor; opacity: .26; pointer-events: none; transform: scale(0); animation: vdd-ripple .65s var(--ease-out) forwards; }
 #vdd-root .vdd-cancel { width: calc(100% - 30px); margin: 0 15px 12px; border-color: rgba(233, 132, 122, .25); color: var(--danger); background: rgba(233, 132, 122, .08); }
 #vdd-root .vdd-actions { display: flex; padding: 0 15px 15px; }
 #vdd-root .vdd-btn {
+  position: relative;
+  isolation: isolate;
   display: flex;
   width: 100%;
-  min-height: 43px;
+  min-height: 46px;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 9px 12px;
-  border: 1px solid transparent;
-  border-radius: 8px;
+  gap: 9px;
+  padding: 10px 14px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 12px;
   color: var(--accent-ink);
-  background: var(--accent);
-  font-size: 12.5px;
-  font-weight: 720;
-  transition: transform .16s var(--ease-out), background .16s ease, opacity .16s ease;
+  background: linear-gradient(180deg, #c9ff45 0%, var(--accent) 50%, #8dd400 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 0 rgba(0, 0, 0, .16), 0 8px 18px -8px rgba(168, 245, 0, .55);
+  font-size: 13px;
+  font-weight: 760;
+  letter-spacing: -.01em;
+  line-height: 1.2;
+  transition: transform .2s var(--ease-out), box-shadow .24s ease, filter .2s ease, opacity .2s ease, background .24s ease, color .2s ease;
 }
-#vdd-root .vdd-btn::before { display: block; width: 16px; height: 16px; flex: 0 0 auto; background: currentColor; content: ""; -webkit-mask: var(--ic-dl) center / contain no-repeat; mask: var(--ic-dl) center / contain no-repeat; }
-#vdd-root .vdd-btn:active:not(:disabled) { transform: scale(.985); }
-#vdd-root .vdd-btn:disabled { opacity: .72; }
-#vdd-root .vdd-btn:disabled::before { -webkit-mask-image: var(--ic-spin); mask-image: var(--ic-spin); transform-origin: center; animation: vdd-button-spin .8s linear infinite; }
-#vdd-root .vdd-card:has(.vdd-btn:disabled) { border-color: rgba(168, 245, 0, .38); }
+#vdd-root .vdd-btn::before { position: relative; z-index: 1; display: block; width: 17px; height: 17px; flex: 0 0 auto; background: currentColor; content: ""; -webkit-mask: var(--ic-dl) center / contain no-repeat; mask: var(--ic-dl) center / contain no-repeat; transition: transform .25s var(--ease-out); }
+#vdd-root .vdd-btn::after { position: absolute; inset: 0; z-index: 0; background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, .55) 50%, transparent 70%); content: ""; opacity: 0; pointer-events: none; transform: translateX(-120%); }
+#vdd-root .vdd-btn:active:not(:disabled) { transform: scale(.975); box-shadow: inset 0 2px 6px rgba(0, 0, 0, .22), 0 3px 10px -6px rgba(168, 245, 0, .5); }
+#vdd-root .vdd-btn:disabled { color: var(--accent); border-color: rgba(168, 245, 0, .32); background: linear-gradient(180deg, rgba(168, 245, 0, .16), rgba(168, 245, 0, .08)); box-shadow: inset 0 0 0 1px rgba(168, 245, 0, .06); opacity: 1; cursor: progress; }
+#vdd-root .vdd-btn:disabled::before { -webkit-mask-image: var(--ic-spin); mask-image: var(--ic-spin); transform-origin: center; animation: vdd-button-spin .75s linear infinite; }
+#vdd-root .vdd-btn:disabled::after { opacity: .7; animation: vdd-sheen 1.8s ease-in-out infinite; }
+#vdd-root .vdd-btn.vdd-btn-ghost { color: var(--text); border-color: var(--line); background: var(--surface-raised); box-shadow: none; font-weight: 680; }
+#vdd-root .vdd-btn.vdd-btn-ghost:disabled { color: var(--accent); background: rgba(168, 245, 0, .08); }
+#vdd-root .vdd-btn.vdd-btn-mp3::before { -webkit-mask-image: var(--ic-note); mask-image: var(--ic-note); }
+#vdd-root .vdd-btn.vdd-btn-mp3:disabled::before { -webkit-mask-image: var(--ic-spin); mask-image: var(--ic-spin); }
+#vdd-root .vdd-btn.vdd-btn-img::before { -webkit-mask-image: var(--ic-img); mask-image: var(--ic-img); }
+#vdd-root .vdd-btn.vdd-btn-img:disabled::before { -webkit-mask-image: var(--ic-spin); mask-image: var(--ic-spin); }
+#vdd-root .vdd-btn.vdd-btn-zip::before { -webkit-mask-image: var(--ic-zip); mask-image: var(--ic-zip); }
+#vdd-root .vdd-btn.vdd-btn-zip:disabled::before { -webkit-mask-image: var(--ic-spin); mask-image: var(--ic-spin); }
+#vdd-root .vdd-card:has(.vdd-btn:disabled) { border-color: rgba(168, 245, 0, .45); box-shadow: 0 0 0 1px rgba(168, 245, 0, .12), 0 14px 34px -18px rgba(168, 245, 0, .4); }
 #vdd-root .vdd-progress { display: none; padding: 0 15px 15px; }
-#vdd-root .vdd-progress.show { display: block; animation: vdd-fade-in .16s ease both; }
-#vdd-root .vdd-progress-line { position: relative; height: 3px; overflow: hidden; border-radius: 99px; background: var(--surface-high); contain: paint; }
-#vdd-root .vdd-progress-bar { display: block; position: relative; width: 0; height: 100%; overflow: hidden; border-radius: inherit; background: var(--accent); transform: translate3d(0, 0, 0); transition: width .18s linear; }
-#vdd-root .vdd-progress-line[aria-valuenow="100"] .vdd-progress-bar { background: var(--accent); }
-#vdd-root .vdd-progress-line[aria-valuenow="100"] .vdd-progress-bar::after { opacity: 0; }
-#vdd-root .vdd-progress-line.indeterminate .vdd-progress-bar { width: 32% !important; transition: none; will-change: transform; animation: vdd-progress 1.1s cubic-bezier(.45, 0, .55, 1) infinite alternate; }
-#vdd-root.vdd-paused .vdd-progress-line.indeterminate .vdd-progress-bar { animation-play-state: paused; }
-#vdd-root .vdd-progress-text { min-height: 1.45em; margin-top: 8px; line-height: 1.45; overflow-wrap: anywhere; }
-#vdd-root .vdd-progress-text[data-state="complete"]::before { display: inline-block; margin-right: 5px; color: var(--accent); content: "✓"; animation: vdd-check .24s var(--ease-out) both; }
+#vdd-root .vdd-progress.show { display: block; animation: vdd-rise .28s var(--ease-out) both; }
+#vdd-root .vdd-progress-line { position: relative; height: 7px; overflow: hidden; border-radius: 99px; background: rgba(255, 255, 255, .07); box-shadow: inset 0 1px 2px rgba(0, 0, 0, .35); contain: paint; }
+#vdd-root .vdd-progress-bar { position: relative; display: block; width: 0; height: 100%; overflow: hidden; border-radius: inherit; background: linear-gradient(90deg, #79c800, var(--accent) 55%, #dcff85); box-shadow: 0 0 14px rgba(168, 245, 0, .55); transform: translate3d(0, 0, 0); transition: width .4s var(--ease-out); }
+#vdd-root .vdd-progress-bar::after { position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .6), transparent); content: ""; transform: translateX(-100%); animation: vdd-shimmer 1.5s ease-in-out infinite; }
+#vdd-root .vdd-progress-line[aria-valuenow="100"] .vdd-progress-bar::after { animation: none; opacity: 0; }
+#vdd-root .vdd-progress-line.indeterminate .vdd-progress-bar { width: 38% !important; transition: none; will-change: transform; animation: vdd-progress 1.25s cubic-bezier(.65, 0, .35, 1) infinite alternate; }
+#vdd-root.vdd-paused .vdd-progress-line.indeterminate .vdd-progress-bar,
+#vdd-root.vdd-paused .vdd-progress-bar::after { animation-play-state: paused; }
+#vdd-root .vdd-progress-text { display: flex; align-items: flex-start; gap: 8px; min-height: 1.45em; margin-top: 9px; line-height: 1.45; overflow-wrap: anywhere; }
+#vdd-root .vdd-progress-text::before { flex: 0 0 auto; width: 8px; height: 8px; margin-top: .42em; border-radius: 50%; background: var(--quiet); content: ""; }
+#vdd-root .vdd-card[data-dl="running"] .vdd-progress-text:not([data-state])::before,
+#vdd-root .vdd-card[data-dl="running"] .vdd-progress-text[data-state=""]::before { background: var(--accent); box-shadow: 0 0 0 0 rgba(168, 245, 0, .55); animation: vdd-ping 1.4s ease-out infinite; }
+#vdd-root .vdd-progress-text[data-state="queued"]::before { background: #7fb2ff; }
+#vdd-root .vdd-progress-text[data-state="error"]::before { background: var(--danger); }
+#vdd-root .vdd-progress-text[data-state="complete"]::before { width: 14px; height: 14px; margin-top: .16em; border-radius: 0; background: var(--accent); -webkit-mask: var(--ic-check) center / contain no-repeat; mask: var(--ic-check) center / contain no-repeat; animation: vdd-check .34s var(--ease-out) both; }
 
 #vdd-root .vdd-entry { contain-intrinsic-size: auto 17rem; }
 #vdd-root .vdd-entry-items { grid-template-columns: repeat(auto-fit, minmax(min(100%, 23rem), 1fr)); gap: 9px; padding: 0 12px 12px; border-top: 1px solid var(--line); background: rgba(0, 0, 0, .12); }
@@ -659,11 +659,11 @@
 #vdd-sites-view,
 #vdd-diag-view { padding: 20px clamp(16px, 2vw, 24px) 28px; }
 #vdd-root .vdd-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr)); gap: 9px; }
-#vdd-root .vdd-tile { position: relative; display: grid; min-width: 0; min-height: 96px; align-content: start; gap: 8px; overflow: hidden; padding: 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: var(--surface); text-align: left; transition: transform .18s var(--ease-out), border-color .16s ease, background .16s ease; }
+#vdd-root .vdd-tile { position: relative; isolation: isolate; display: grid; min-width: 0; min-height: 96px; align-content: start; justify-items: start; gap: 8px; overflow: hidden; padding: 13px; border: 1px solid var(--line); border-radius: 13px; color: var(--text); background: linear-gradient(180deg, rgba(255, 255, 255, .035), transparent 70%), var(--surface); text-align: left; transition: transform .2s var(--ease-out), border-color .18s ease, background .18s ease, box-shadow .22s ease; }
 #vdd-root .vdd-tile .vdd-site,
-#vdd-root .vdd-tile .vdd-glyph { width: 28px; height: 28px; border-radius: 7px; }
+#vdd-root .vdd-tile .vdd-glyph { width: 30px; height: 30px; min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px; border-radius: 9px; }
 #vdd-root .vdd-glyph { display: grid; place-items: center; color: var(--muted); background: var(--surface-raised); }
-#vdd-root .vdd-glyph svg { width: 17px; height: 17px; }
+#vdd-root .vdd-glyph svg { display: block; width: 18px; height: 18px; }
 #vdd-root .vdd-tile b { font-size: 13px; font-weight: 680; letter-spacing: -.01em; }
 #vdd-root .vdd-tile small { color: var(--muted); font-size: 11px; line-height: 1.4; }
 #vdd-root .vdd-tile.on { border-color: rgba(168, 245, 0, .42); background: rgba(168, 245, 0, .055); }
@@ -673,12 +673,6 @@
 #vdd-root .vdd-section { margin: 20px 0 9px; color: var(--quiet); font-size: 10px; font-weight: 720; letter-spacing: .12em; text-transform: uppercase; }
 
 #vdd-root .vdd-diag-intro { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
-#vdd-root .vdd-settings-view { padding: 20px clamp(16px, 2vw, 24px) 28px; }
-#vdd-root .vdd-setting { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
-#vdd-root .vdd-setting > span { display: grid; gap: 4px; }
-#vdd-root .vdd-setting b { color: var(--text); font-size: 13px; font-weight: 680; }
-#vdd-root .vdd-setting small { color: var(--muted); font-size: 11.5px; line-height: 1.5; }
-#vdd-root .vdd-setting select { width: 100%; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--surface-raised); }
 #vdd-root .vdd-diag-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 #vdd-root .vdd-diag-actions button { display: flex; flex: 1 1 140px; min-height: 44px; align-items: center; justify-content: center; gap: 8px; padding: 7px 12px; color: var(--text); font-size: 12px; font-weight: 650; }
 #vdd-root .vdd-diag-actions button.vdd-primary { border: 1px solid transparent; border-radius: 8px; color: var(--accent-ink); background: var(--accent); }
@@ -697,8 +691,9 @@
 #vdd-root #vdd-boot { position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; align-content: center; gap: 15px; padding: 24px; background: var(--canvas); text-align: center; transition: opacity .22s ease, visibility 0s linear .22s; }
 #vdd-root #vdd-boot[hidden] { display: grid !important; visibility: hidden; opacity: 0; pointer-events: none; }
 #vdd-root #vdd-boot .vdd-boot-ring { position: relative; display: grid; width: 72px; height: 72px; place-items: center; border: 1px solid var(--line); border-radius: 50%; color: var(--accent); background: var(--surface); }
-#vdd-root #vdd-boot .vdd-boot-ring::before,
-#vdd-root #vdd-boot .vdd-boot-ring::after { display: none; }
+#vdd-root #vdd-boot .vdd-boot-ring::before { position: absolute; inset: -5px; border: 2px solid transparent; border-top-color: var(--accent); border-right-color: rgba(168, 245, 0, .35); border-radius: 50%; content: ""; animation: vdd-button-spin 1s linear infinite; }
+#vdd-root #vdd-boot .vdd-boot-ring::after { position: absolute; inset: -14px; border-radius: 50%; background: radial-gradient(closest-side, rgba(168, 245, 0, .16), transparent); content: ""; animation: vdd-breathe 2.2s ease-in-out infinite; }
+#vdd-root #vdd-boot .vdd-boot-ring svg { animation: vdd-bob 1.4s ease-in-out infinite; }
 #vdd-root #vdd-boot .vdd-boot-ring svg { position: relative; z-index: 1; width: 32px; height: 32px; }
 #vdd-root #vdd-boot h2 { margin: 0; color: var(--text); font-size: 19px; font-weight: 720; letter-spacing: -.03em; }
 #vdd-root #vdd-boot p { min-height: 1.5em; margin: 0; color: var(--muted); font-size: 12px; }
@@ -711,15 +706,23 @@
 #vdd-toast.show { opacity: 1; transform: none; }
 
 @keyframes vdd-panel-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes vdd-card-in { from { opacity: 0; transform: translate3d(0, 4px, 0); } to { opacity: 1; transform: translate3d(0, 0, 0); } }
+@keyframes vdd-card-in { from { opacity: 0; transform: translate3d(0, 10px, 0) scale(.985); } to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); } }
 @keyframes vdd-fade-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes vdd-progress { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(210%, 0, 0); } }
+@keyframes vdd-progress { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(163%, 0, 0); } }
+@keyframes vdd-shimmer { to { transform: translateX(100%); } }
+@keyframes vdd-sheen { 0% { transform: translateX(-120%); } 60%, 100% { transform: translateX(120%); } }
+@keyframes vdd-ripple { to { transform: scale(1); opacity: 0; } }
+@keyframes vdd-orbit { to { transform: rotate(360deg); } }
+@keyframes vdd-bob { 0%, 100% { transform: translateY(-1px); } 50% { transform: translateY(2.2px); } }
+@keyframes vdd-ping { 0% { box-shadow: 0 0 0 0 rgba(168, 245, 0, .55); } 80%, 100% { box-shadow: 0 0 0 7px rgba(168, 245, 0, 0); } }
+@keyframes vdd-rise { from { opacity: 0; transform: translate3d(0, 6px, 0); } to { opacity: 1; transform: translate3d(0, 0, 0); } }
+@keyframes vdd-breathe { 0%, 100% { opacity: .5; transform: scale(.94); } 50% { opacity: 1; transform: scale(1.06); } }
 @keyframes vdd-button-spin { to { transform: rotate(360deg); } }
 @keyframes vdd-refresh { to { transform: rotate(180deg); } }
 @keyframes vdd-view-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
-@keyframes vdd-check { from { transform: scale(.65); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes vdd-check { from { transform: scale(.4) rotate(-20deg); opacity: 0; } to { transform: scale(1) rotate(0); opacity: 1; } }
 
-#vdd-root .vdd-card.vdd-enter { animation: vdd-card-in .18s var(--ease-out) both; }
+#vdd-root .vdd-card.vdd-enter { animation: vdd-card-in .42s var(--ease-out) both; animation-delay: calc(var(--i, 0) * 55ms); }
 @media (hover: hover) {
   #vdd-open:hover { border-color: var(--accent); background: #11170a; }
   #vdd-open:hover::before { transform: scale(1.04); }
@@ -727,8 +730,11 @@
   #vdd-root .vdd-tab:hover:not([aria-selected="true"]) { color: var(--text); }
   #vdd-root .vdd-text-btn:hover { color: var(--text); background: rgba(255, 255, 255, .045); }
   #vdd-root .vdd-link-btn:hover:not(:disabled),
-  #vdd-root .vdd-btn:hover:not(:disabled),
   #vdd-root .vdd-diag-actions button.vdd-primary:hover:not(:disabled) { background: #c4ff50; transform: translateY(-1px); }
+  #vdd-root .vdd-btn:hover:not(:disabled) { filter: brightness(1.06); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), inset 0 -1px 0 rgba(0, 0, 0, .16), 0 12px 24px -10px rgba(168, 245, 0, .7); }
+  #vdd-root .vdd-btn:hover:not(:disabled)::after { opacity: 1; animation: vdd-sheen .9s ease-out; }
+  #vdd-root .vdd-btn:hover:not(:disabled)::before { transform: translateY(1.5px); }
+  #vdd-root .vdd-btn.vdd-btn-ghost:hover:not(:disabled) { background: var(--surface-high); box-shadow: none; filter: none; }
   #vdd-root .vdd-quality-refresh:hover:not(:disabled),
   #vdd-root .vdd-ghost:hover,
   #vdd-root .vdd-cancel:hover { border-color: rgba(255, 255, 255, .18); background: var(--surface-high); }
@@ -814,8 +820,34 @@
   #vdd-open::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
   `;
-  const CSS2 = ``;
+  const CSS2 = `
+/* ---- 2.12.0: HD, imagens, áudio, ZIP e MP3 ---- */
+#vdd-root .vdd-badge.vdd-chip-hd { border-color: rgba(168, 245, 0, .4); color: var(--accent-ink); background: linear-gradient(180deg, #c9ff45, var(--accent)); font-weight: 780; }
+#vdd-root .vdd-actions.vdd-actions-sub { gap: 8px; margin-top: -3px; align-items: stretch; }
+#vdd-root .vdd-actions-sub .vdd-btn { flex: 1 1 auto; min-height: 42px; font-size: 12.5px; }
+#vdd-root .vdd-mp3q { flex: 0 0 auto; min-width: 0; min-height: 42px; margin: 0; padding: 8px 30px 8px 11px; border: 1px solid var(--line); border-radius: 11px; color: var(--text); background: var(--surface-raised) var(--ic-chev) no-repeat right 8px center / 15px; font-size: 12px; -webkit-appearance: none; appearance: none; }
+#vdd-root .vdd-mp3q-label { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 11.5px; }
+#vdd-root .vdd-mp3q-label .vdd-mp3q { flex: 1 1 auto; max-width: 12rem; }
+#vdd-root .vdd-btn.vdd-wait:disabled { color: var(--quiet); border-color: var(--line); background: var(--surface-raised); box-shadow: none; opacity: .55; cursor: not-allowed; }
+#vdd-root .vdd-btn.vdd-wait:disabled::before { display: none; }
+#vdd-root .vdd-btn.vdd-wait:disabled::after { display: none; }
+#vdd-root .vdd-card[data-media="image"] .vdd-card-top,
+#vdd-root .vdd-card[data-media="zip"] .vdd-card-top { grid-template-columns: minmax(5.5rem, .7fr) minmax(0, 1.3fr); }
+#vdd-root .vdd-card[data-media="image"] .vdd-thumb,
+#vdd-root .vdd-card[data-media="zip"] .vdd-thumb { aspect-ratio: 4 / 5; max-height: 15rem; }
+#vdd-root .vdd-card[data-media="audio"] .vdd-thumb { aspect-ratio: 1 / 1; max-width: 9rem; }
+#vdd-root .vdd-card[data-media="zip"] { border-color: rgba(168, 245, 0, .3); background: linear-gradient(180deg, rgba(168, 245, 0, .05), transparent 55%), var(--surface); }
+@container (max-width: 350px) {
+  #vdd-root .vdd-card[data-media="image"] .vdd-thumb,
+  #vdd-root .vdd-card[data-media="zip"] .vdd-thumb { aspect-ratio: 16 / 10; max-height: 12rem; }
+  #vdd-root .vdd-card[data-media="audio"] .vdd-thumb { aspect-ratio: 16 / 7; max-width: none; }
+}
+`;
 
+  // ---------------------------------------------------------------------------
+  // Panel layout
+  // Style injection, page scroll lock, panel sizing and open/close state.
+  // ---------------------------------------------------------------------------
   function addStyle() {
     if (document.getElementById('vdd-style')) return;
     const style = document.createElement('style');
@@ -873,6 +905,8 @@
     const ch = Math.max(220, Math.min(810, h - bottom - sat - 12));
     const vars = { w, h, sat, sar, sab, sal, cw, ch, cl: w - cw - margin - sar, ct: h - ch - bottom, d: Math.ceil(Math.hypot(w, h)) + 4 };
     for (const [key, value] of Object.entries(vars)) root.style.setProperty(`--vdd-${key}`, `${value}px`);
+    Object.assign(VIEW, { w, h, sat, sar, sab, sal, cw, ch });
+    loadPositions(); placeButton(); placePanel();
   }
 
   const PANEL_STATE = { shown: false, timer: 0 };
@@ -887,6 +921,173 @@
     }
   }
 
+  const LOGO_SVG = '<svg viewBox="0 0 32 32" aria-hidden="true" focusable="false"><circle cx="16" cy="16" r="13" fill="none" stroke="currentColor" stroke-opacity=".28" stroke-width="2"/><circle class="vdd-ring" cx="16" cy="16" r="13" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="22 60"/><g class="vdd-arrow" fill="none" stroke="currentColor" stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 8.2v10.6"/><path d="m11.3 14.3 4.7 4.7 4.7-4.7"/></g><path class="vdd-tray" d="M10.4 23.4h11.2" fill="none" stroke="currentColor" stroke-width="2.7" stroke-linecap="round"/></svg>';
+
+  // ---------------------------------------------------------------------------
+  // Preferences
+  // Saved settings through GM_setValue, with localStorage as a fallback.
+  // ---------------------------------------------------------------------------
+  const PREFS = {
+    get(key, fallback = null) {
+      try { if (typeof GM_getValue === 'function') { const v = GM_getValue(`optdowns.${key}`); if (v !== undefined && v !== null && v !== '') return typeof v === 'string' ? JSON.parse(v) : v; } } catch {}
+      try { const raw = localStorage.getItem(`optdowns.${key}`); if (raw != null) return JSON.parse(raw); } catch {}
+      return fallback;
+    },
+    set(key, value) {
+      const raw = JSON.stringify(value);
+      try { if (typeof GM_setValue === 'function') GM_setValue(`optdowns.${key}`, raw); else if (typeof GM !== 'undefined' && GM.setValue) GM.setValue(`optdowns.${key}`, raw); } catch {}
+      try { localStorage.setItem(`optdowns.${key}`, raw); } catch {}
+    },
+  };
+
+  const VIEW = { w: 390, h: 800, sat: 0, sar: 0, sab: 0, sal: 0, cw: 480, ch: 810 };
+
+  // ---------------------------------------------------------------------------
+  // Floating button and dragging
+  // Saved positions for the button and the panel, plus the drag handlers.
+  // ---------------------------------------------------------------------------
+  const POS = { btn: null, panel: null, suppressClick: false, loaded: false };
+  const clampNum = (value, lo, hi) => Math.min(Math.max(value, lo), Math.max(lo, hi));
+  const finiteFrac = value => Number.isFinite(Number(value)) ? clampNum(Number(value), 0, 1) : 0;
+
+  function loadPositions() {
+    if (POS.loaded) return; POS.loaded = true;
+    for (const key of ['btn', 'panel']) {
+      const v = PREFS.get(`pos.${key}`, null);
+      POS[key] = v && typeof v === 'object' && 'fx' in v && 'fy' in v ? { fx: finiteFrac(v.fx), fy: finiteFrac(v.fy) } : null;
+    }
+  }
+
+  function buttonBounds(btn) {
+    const w = btn.offsetWidth || 56, h = btn.offsetHeight || 56;
+    return { w, h, minX: 8 + VIEW.sal, maxX: VIEW.w - w - 8 - VIEW.sar, minY: 8 + VIEW.sat, maxY: VIEW.h - h - 8 - VIEW.sab };
+  }
+
+  function setButtonXY(btn, x, y) {
+    btn.style.setProperty('left', `${Math.round(x)}px`); btn.style.setProperty('top', `${Math.round(y)}px`);
+    btn.style.setProperty('right', 'auto'); btn.style.setProperty('bottom', 'auto');
+  }
+
+  function placeButton() {
+    const btn = document.getElementById('vdd-open'); if (!btn) return;
+    if (!POS.btn) { for (const k of ['left', 'top', 'right', 'bottom']) btn.style.removeProperty(k); return; }
+    const b = buttonBounds(btn);
+    setButtonXY(btn, clampNum(b.minX + POS.btn.fx * (b.maxX - b.minX), b.minX, b.maxX), clampNum(b.minY + POS.btn.fy * (b.maxY - b.minY), b.minY, b.maxY));
+  }
+
+  function panelBounds(width, height) {
+    return { minX: 8 + VIEW.sal, maxX: VIEW.w - width - 8 - VIEW.sar, minY: 8 + VIEW.sat, maxY: VIEW.h - height - 8 - VIEW.sab };
+  }
+
+  function placePanel() {
+    const panel = document.getElementById('vdd-panel'), btn = document.getElementById('vdd-open'); if (!panel) return;
+    if (panel.classList.contains('vdd-full')) {
+      panel.style.removeProperty('--vdd-pl'); panel.style.removeProperty('--vdd-pt'); panel.style.removeProperty('transform-origin'); return;
+    }
+    const width = Math.min(VIEW.cw, VIEW.w - 16), height = Math.min(VIEW.ch, VIEW.h - 16), b = panelBounds(width, height);
+    let x = null, y = null;
+    if (POS.panel) {
+      x = b.minX + POS.panel.fx * (b.maxX - b.minX); y = b.minY + POS.panel.fy * (b.maxY - b.minY);
+    } else if (POS.btn && btn) {
+      const r = btn.getBoundingClientRect(), gap = 10;
+      x = r.left + r.width / 2 > VIEW.w / 2 ? r.right - width : r.left;
+      y = r.top + r.height / 2 > VIEW.h / 2 ? r.top - height - gap : r.bottom + gap;
+    }
+    if (x == null) { panel.style.removeProperty('--vdd-pl'); panel.style.removeProperty('--vdd-pt'); }
+    else { x = clampNum(x, b.minX, b.maxX); y = clampNum(y, b.minY, b.maxY); panel.style.setProperty('--vdd-pl', `${Math.round(x)}px`); panel.style.setProperty('--vdd-pt', `${Math.round(y)}px`); }
+    if (btn) {
+      const r = btn.getBoundingClientRect(), px = x == null ? Math.max(8, VIEW.w - width - 16) : x, py = y == null ? Math.max(8, VIEW.h - height - 82) : y;
+      panel.style.setProperty('transform-origin', `${Math.round(r.left + r.width / 2 - px)}px ${Math.round(r.top + r.height / 2 - py)}px`);
+    }
+  }
+
+  function installFloatingDrag(root) {
+    const btn = root.querySelector('#vdd-open'); if (!btn) return;
+    let drag = null;
+    btn.addEventListener('pointerdown', event => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      const r = btn.getBoundingClientRect();
+      drag = { id: event.pointerId, sx: event.clientX, sy: event.clientY, ox: r.left, oy: r.top, moved: false };
+      try { btn.setPointerCapture(event.pointerId); } catch {}
+    });
+    btn.addEventListener('pointermove', event => {
+      if (!drag || event.pointerId !== drag.id) return;
+      const dx = event.clientX - drag.sx, dy = event.clientY - drag.sy;
+      if (!drag.moved) {
+        if (Math.hypot(dx, dy) < 7) return;
+        drag.moved = true; btn.classList.remove('vdd-snapping'); btn.classList.add('vdd-dragging');
+      }
+      const b = buttonBounds(btn);
+      setButtonXY(btn, clampNum(drag.ox + dx, b.minX, b.maxX), clampNum(drag.oy + dy, b.minY, b.maxY));
+      event.preventDefault();
+    });
+    const finish = event => {
+      if (!drag || (event && event.pointerId !== drag.id)) return;
+      const was = drag; drag = null;
+      try { btn.releasePointerCapture(was.id); } catch {}
+      btn.classList.remove('vdd-dragging');
+      if (!was.moved) return;
+      POS.suppressClick = true; setTimeout(() => { POS.suppressClick = false; }, 380);
+      const b = buttonBounds(btn), r = btn.getBoundingClientRect();
+      let x = clampNum(r.left, b.minX, b.maxX), y = clampNum(r.top, b.minY, b.maxY);
+      const magnet = 26;
+      if (x - b.minX < magnet) x = b.minX; else if (b.maxX - x < magnet) x = b.maxX;
+      if (y - b.minY < magnet) y = b.minY; else if (b.maxY - y < magnet) y = b.maxY;
+      btn.classList.add('vdd-snapping'); setButtonXY(btn, x, y);
+      setTimeout(() => btn.classList.remove('vdd-snapping'), 420);
+      POS.btn = { fx: finiteFrac((x - b.minX) / ((b.maxX - b.minX) || 1)), fy: finiteFrac((y - b.minY) / ((b.maxY - b.minY) || 1)) };
+      PREFS.set('pos.btn', POS.btn);
+      if (!POS.panel) placePanel();
+    };
+    btn.addEventListener('pointerup', finish);
+    btn.addEventListener('pointercancel', finish);
+    btn.addEventListener('lostpointercapture', finish);
+    btn.addEventListener('dblclick', event => { if (event.shiftKey) { POS.btn = null; PREFS.set('pos.btn', null); placeButton(); placePanel(); } });
+  }
+
+  function installPanelDrag(root) {
+    const panel = root.querySelector('#vdd-panel'), head = root.querySelector('.vdd-head'); if (!panel || !head) return;
+    let drag = null;
+    head.addEventListener('pointerdown', event => {
+      if (panel.classList.contains('vdd-full')) return;
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      if (event.target.closest('button, a, input, select, textarea')) return;
+      const r = panel.getBoundingClientRect();
+      drag = { id: event.pointerId, sx: event.clientX, sy: event.clientY, ox: r.left, oy: r.top, w: r.width, h: r.height, moved: false };
+      try { head.setPointerCapture(event.pointerId); } catch {}
+    });
+    head.addEventListener('pointermove', event => {
+      if (!drag || event.pointerId !== drag.id) return;
+      const dx = event.clientX - drag.sx, dy = event.clientY - drag.sy;
+      if (!drag.moved) { if (Math.hypot(dx, dy) < 5) return; drag.moved = true; panel.classList.add('vdd-dragging'); }
+      const b = panelBounds(drag.w, drag.h);
+      panel.style.setProperty('--vdd-pl', `${Math.round(clampNum(drag.ox + dx, b.minX, b.maxX))}px`);
+      panel.style.setProperty('--vdd-pt', `${Math.round(clampNum(drag.oy + dy, b.minY, b.maxY))}px`);
+      event.preventDefault();
+    });
+    const finish = event => {
+      if (!drag || (event && event.pointerId !== drag.id)) return;
+      const was = drag; drag = null;
+      try { head.releasePointerCapture(was.id); } catch {}
+      panel.classList.remove('vdd-dragging');
+      if (!was.moved) return;
+      const b = panelBounds(was.w, was.h), r = panel.getBoundingClientRect();
+      POS.panel = { fx: finiteFrac((r.left - b.minX) / ((b.maxX - b.minX) || 1)), fy: finiteFrac((r.top - b.minY) / ((b.maxY - b.minY) || 1)) };
+      PREFS.set('pos.panel', POS.panel);
+    };
+    head.addEventListener('pointerup', finish);
+    head.addEventListener('pointercancel', finish);
+    head.addEventListener('lostpointercapture', finish);
+    head.addEventListener('dblclick', event => {
+      if (panel.classList.contains('vdd-full') || event.target.closest('button')) return;
+      POS.panel = null; PREFS.set('pos.panel', null); placePanel();
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Panel UI
+  // Builds the floating button, the panel, its tabs and toasts.
+  // ---------------------------------------------------------------------------
   function buildUi() {
     if (document.getElementById('vdd-root')) return;
     addStyle();
@@ -894,11 +1095,12 @@
     const root = document.createElement('div');
     root.id = 'vdd-root';
     root.innerHTML = `
-      <button id="vdd-open" type="button" aria-label="Abrir downloads"><svg viewBox="0 0 32 32" aria-hidden="true" focusable="false"><circle cx="16" cy="16" r="12.5" fill="none" stroke="currentColor" stroke-opacity=".32" stroke-width="2"/><circle class="vdd-ring" cx="16" cy="16" r="12.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="18 61"/><g class="vdd-arrow" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 8.5v10"/><path d="m11.4 14.4 4.6 4.6 4.6-4.6"/></g><path d="M11 23.2h10" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/></svg></button>
+      <button id="vdd-open" type="button" aria-label="Abrir downloads (arraste para mover)">${LOGO_SVG}</button>
       <section id="vdd-panel" class="vdd-full" role="dialog" aria-label="Baixar vídeos">
         <div class="vdd-aurora" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
         <div class="vdd-head">
-          <div class="vdd-logo" aria-hidden="true"><svg viewBox="0 0 32 32" aria-hidden="true" focusable="false"><circle cx="16" cy="16" r="12.5" fill="none" stroke="currentColor" stroke-opacity=".32" stroke-width="2"/><circle class="vdd-ring" cx="16" cy="16" r="12.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="18 61"/><g class="vdd-arrow" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 8.5v10"/><path d="m11.4 14.4 4.6 4.6 4.6-4.6"/></g><path d="M11 23.2h10" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/></svg></div>
+          <div class="vdd-grip" aria-hidden="true"></div>
+          <div class="vdd-logo" aria-hidden="true">${LOGO_SVG}</div>
           <div class="vdd-head-main">
             <div class="vdd-eyebrow">DOWNLOADS NO NAVEGADOR</div><div class="vdd-title">OPTDOWNS <span>${SCRIPT_VERSION}</span></div>
             <div class="vdd-sub" id="vdd-count">Procurando mídia...</div>
@@ -906,7 +1108,6 @@
           <button class="vdd-icon vdd-expand" id="vdd-expand" type="button" aria-label="Expandir em tela cheia" aria-pressed="true">${ic("expand","vdd-ico-out")}${ic("collapse","vdd-ico-in")}</button>
           <button class="vdd-icon" id="vdd-refresh" type="button" aria-label="Atualizar">${ic("refresh")}</button>
           <button class="vdd-icon" id="vdd-diag" type="button" aria-label="Diagnóstico e correção" aria-pressed="false">${ic("pulse")}</button>
-          <button class="vdd-icon" id="vdd-settings" type="button" aria-label="Configurações" aria-pressed="false">${ic("settings")}</button>
           <button class="vdd-icon" id="vdd-close" type="button" aria-label="Fechar">${ic("close")}</button>
         </div>
         <div class="vdd-tabs" role="tablist" aria-label="Origem do vídeo">
@@ -939,18 +1140,6 @@
             <div class="vdd-tiles" id="vdd-tiles"></div>
             <div id="vdd-recents" hidden></div>
           </div>
-          <div class="vdd-view vdd-settings-view" id="vdd-settings-view" role="tabpanel" hidden>
-            <div class="vdd-section">Configurações</div>
-            <label class="vdd-setting" for="vdd-language">
-              <span><b>Idioma da interface</b><small>Escolha o idioma dos textos e controles do OPTDOWNS.</small></span>
-              <select id="vdd-language" aria-label="Idioma da interface">
-                <option value="pt-BR">Português (Brasil)</option>
-                <option value="en">English</option>
-                <option value="es">Español</option>
-              </select>
-            </label>
-            <p class="vdd-link-note">A preferência fica salva neste navegador.</p>
-          </div>
           <div class="vdd-view" id="vdd-diag-view" role="tabpanel" hidden>
             <p class="vdd-diag-intro">Verifica o OPTDOWNS neste dispositivo (gerenciador, conversor HLS, Worker) e explica os erros recentes com sugestões. Ele não altera outros scripts nem contorna login ou proteção dos sites.</p>
             <div class="vdd-diag-actions">
@@ -973,9 +1162,6 @@
     `;
     document.documentElement.appendChild(root);
     new MutationObserver(() => { syncPageLock(); syncPanelClosing(); }).observe(document.getElementById('vdd-panel'), { attributes: true, attributeFilter: ['class'] });
-    const languageObserver = new MutationObserver(() => applyLanguage(root));
-    languageObserver.observe(root, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['aria-label', 'title', 'placeholder'] });
-    applyLanguage(root);
     layoutPanel();
     let layoutFrame = 0;
     const scheduleLayout = () => {
@@ -994,6 +1180,7 @@
       const full = panel.classList.toggle('vdd-full');
       event.currentTarget.setAttribute('aria-pressed', String(full));
       event.currentTarget.setAttribute('aria-label', full ? 'Recolher painel' : 'Expandir em tela cheia');
+      placePanel();
     });
     root.querySelector('.vdd-body').addEventListener('scroll', () => {
       SCROLL_HOLD.active = true;
@@ -1005,9 +1192,11 @@
     }, { passive: true });
 
     document.getElementById('vdd-open').addEventListener('click', () => {
+      if (POS.suppressClick) return;
       APP.panelOpen = !APP.panelOpen;
+      if (APP.panelOpen) layoutPanel();
       document.getElementById('vdd-panel').classList.toggle('show', APP.panelOpen);
-      if (APP.panelOpen) { layoutPanel(); scanAll(); runBootScreen(); }
+      if (APP.panelOpen) { scanAll(); runBootScreen(); }
     });
 
     document.getElementById('vdd-close').addEventListener('click', () => {
@@ -1056,14 +1245,6 @@
     });
     document.getElementById('vdd-tab-sites').addEventListener('click', () => switchTab('sites'));
     document.getElementById('vdd-diag').addEventListener('click', () => switchTab(APP.activeTab === 'diag' ? 'page' : 'diag'));
-    document.getElementById('vdd-settings').addEventListener('click', () => switchTab(APP.activeTab === 'settings' ? 'page' : 'settings'));
-    document.getElementById('vdd-language').value = getLanguage();
-    document.getElementById('vdd-language').addEventListener('change', event => {
-      saveLanguage(event.currentTarget.value);
-      applyLanguage(root);
-      switchTab('settings');
-      toast(translateValue('Idioma atualizado'));
-    });
     document.getElementById('vdd-diag-run').addEventListener('click', runDiagnostics);
     document.getElementById('vdd-diag-fix').addEventListener('click', applySafeFixes);
     document.getElementById('vdd-diag-copy').addEventListener('click', copyDiagnostics);
@@ -1086,12 +1267,14 @@
     });
     renderRecents();
     installInteractionFx(root);
+    installFloatingDrag(root);
+    installPanelDrag(root);
   }
 
   function switchTab(tab) {
-    const name = ['page', 'link', 'sites', 'diag', 'settings'].includes(tab) ? tab : 'page';
+    const name = ['page', 'link', 'sites', 'diag'].includes(tab) ? tab : 'page';
     APP.activeTab = name;
-    const views = { page: 'vdd-page-view', link: 'vdd-link-view', sites: 'vdd-sites-view', diag: 'vdd-diag-view', settings: 'vdd-settings-view' };
+    const views = { page: 'vdd-page-view', link: 'vdd-link-view', sites: 'vdd-sites-view', diag: 'vdd-diag-view' };
     for (const [key, id] of Object.entries(views)) { const view = document.getElementById(id); if (view) view.hidden = key !== name; }
     for (const key of ['page', 'link', 'sites']) {
       const element = document.getElementById(`vdd-tab-${key}`), on = key === name;
@@ -1099,8 +1282,6 @@
     }
     const diagButton = document.getElementById('vdd-diag');
     diagButton?.classList.toggle('on', name === 'diag'); diagButton?.setAttribute('aria-pressed', String(name === 'diag'));
-    const settingsButton = document.getElementById('vdd-settings');
-    settingsButton?.classList.toggle('on', name === 'settings'); settingsButton?.setAttribute('aria-pressed', String(name === 'settings'));
     const refresh = document.getElementById('vdd-refresh');
     if (refresh) refresh.hidden = name !== 'page';
     const scroller = document.querySelector('#vdd-root .vdd-body'); if (scroller && name !== 'page') scroller.scrollTop = 0;
@@ -1115,8 +1296,6 @@
     } else if (name === 'diag') {
       updateHeaderCount('Diagnóstico e correção');
       if (!APP.lastDiag) runDiagnostics();
-    } else if (name === 'settings') {
-      updateHeaderCount('Configurações');
     } else {
       render();
     }
@@ -1136,6 +1315,10 @@
     APP.toastTimer = setTimeout(() => el.classList.remove('show'), ms);
   }
 
+  // ---------------------------------------------------------------------------
+  // URL and media helpers
+  // Small helpers to classify URLs and read the GM request functions.
+  // ---------------------------------------------------------------------------
   function isHttp(url) {
     return /^https?:\/\//i.test(String(url || ''));
   }
@@ -1193,6 +1376,10 @@
     return explicit || location.href;
   }
 
+  // ---------------------------------------------------------------------------
+  // Network memory
+  // Remembers media URLs seen in requests so they can be offered later.
+  // ---------------------------------------------------------------------------
   function rememberNetworkMedia(url, type = '', metadata = {}) {
     const full = absUrl(url);
     if (!isHttp(full)) return false;
@@ -1254,6 +1441,10 @@
     return true;
   }
 
+  // ---------------------------------------------------------------------------
+  // Formats and file names
+  // Format detection from hints and file bytes, and file name cleanup.
+  // ---------------------------------------------------------------------------
   function knownDirectFormatHint(url, type = '') {
     const formats = [
       ['mp4', 'video/mp4', 'MP4', /^(?:video\/(?:mp4|x-m4v)|application\/mp4)$/, /\.(?:mp4|m4v)(?:$|[?#&])/i],
@@ -1382,6 +1573,10 @@
     return filenameForFormat(value, { ext: 'mp4' });
   }
 
+  // ---------------------------------------------------------------------------
+  // Page metadata
+  // Titles, thumbnails, durations and identity keys for media items.
+  // ---------------------------------------------------------------------------
   function pageTitle() {
     const og = document.querySelector('meta[property="og:title"]')?.content;
     return cleanName(og || document.title || 'video');
@@ -1442,7 +1637,7 @@
   function mediaTitleFromUrl(url) {
     try {
       const raw = decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).pop() || '');
-      const name = cleanDisplayText(raw.replace(/\.(?:mp4|m4v|m3u8)(?:$|[?#])/i, '').replace(/[-_]+/g, ' '), 90);
+      const name = cleanDisplayText(raw.replace(/\.(?:mp4|m4v|m3u8|mp3|m4a|aac|ogg|oga|opus|wav|flac)(?:$|[?#])/i, '').replace(/[-_]+/g, ' '), 90);
       if (name && !/^[a-f0-9-]{18,}$/i.test(name) && !/^\d{8,}$/.test(name)) return name;
     } catch {}
     return '';
@@ -1516,6 +1711,10 @@
     return dropped;
   }
 
+  // ---------------------------------------------------------------------------
+  // Media detection
+  // Collects candidates from the DOM, performance entries and page metadata, then registers them.
+  // ---------------------------------------------------------------------------
   function collectFromDom() {
     let changed = false;
     const live = new Set();
@@ -1720,6 +1919,10 @@
     APP.eventScanTimer = setTimeout(scanAll, 250);
   }
 
+  // ---------------------------------------------------------------------------
+  // Grouping
+  // Groups variants of the same video and ranks them by quality.
+  // ---------------------------------------------------------------------------
   function decorateDuplicateTitles(items) {
     const totals = new Map();
     const seen = new Map();
@@ -1803,6 +2006,10 @@
     ]);
   }
 
+  // ---------------------------------------------------------------------------
+  // Rendering
+  // Draws the media list, groups and result cards.
+  // ---------------------------------------------------------------------------
   function render() {
     if (APP.working) return;
     if (SCROLL_HOLD.active) { SCROLL_HOLD.pending = true; return; }
@@ -1836,7 +2043,7 @@
   }
 
   function renderMediaList(list, items, emptyMessage, sourceScope = 'page') {
-    const signature = JSON.stringify(items.map(item => [item.url, item.kind, item.title, item.displayTitle, item.height, item.noWatermark, item.groupKey, item.groupIndex, item.groupSize, item.groupActive]));
+    const signature = JSON.stringify(items.map(item => [item.url, item.kind, item.title, item.displayTitle, item.height, item.noWatermark, item.groupKey, item.groupIndex, item.groupSize, item.groupActive, item.mediaType, item.imageIndex, item.qualityLabel, item.via]));
     if (list.dataset.signature === signature) return;
     const children = [...list.children];
     const prepared = children.filter(card => card.dataset.prepared === 'true');
@@ -1849,7 +2056,7 @@
       const identity = mediaIdentityKey(item.url, item.kind);
       if (preparedIds.has(identity) || seen.has(identity)) return;
       seen.add(identity);
-      const cardSignature = JSON.stringify([item.url, item.kind, item.title, item.displayTitle, item.thumbnail, item.duration, item.width, item.height, item.noWatermark, item.preferred, item.label, item.hasAudio]);
+      const cardSignature = JSON.stringify([item.url, item.kind, item.title, item.displayTitle, item.thumbnail, item.duration, item.width, item.height, item.noWatermark, item.preferred, item.label, item.hasAudio, item.mediaType, item.imageIndex, item.qualityLabel, item.via]);
       let card = reusable.get(identity);
       if (!card || card.dataset.sig !== cardSignature) {
         card = createMediaCard(item, index, sourceScope); card.dataset.identity = identity; card.dataset.sig = cardSignature;
@@ -1889,26 +2096,53 @@
     }
   }
 
+  const NOTE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg>';
+  const IMAGE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="3.2"/><circle cx="9" cy="10" r="1.6"/><path d="m4.5 17.5 4.7-4.6 3.3 3.2 2.6-2.5 4.4 3.9"/></svg>';
+  const VIDEO_SVG = '<svg viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 5 17.5zm5.2 2.1v6.8a.6.6 0 0 0 .9.5l5.2-3.4a.6.6 0 0 0 0-1l-5.2-3.4a.6.6 0 0 0-.9.5z"/></svg>';
+
+  function mp3QualitySelect() {
+    return `<select class="vdd-mp3q" aria-label="Qualidade do MP3">${MP3_BITRATES.map(v => `<option value="${v}"${v === OUTPUT.kbps ? ' selected' : ''}>${v} kbps${v === 320 ? ' · máxima' : v === 192 ? ' · boa' : v === 128 ? ' · leve' : ''}</option>`).join('')}</select>`;
+  }
+
+  // Builds one media card: thumbnail, title, quality choices and the download button.
   function createMediaCard(item, index, sourceScope = 'page') {
+    if (item.mediaType === 'youtube') return createYouTubeCard(item, index, sourceScope);
     const card = document.createElement('article');
     card.className = 'vdd-card';
-    const title = cleanDisplayText(item.displayTitle || item.title) || `Vídeo ${index + 1}`;
+    card.dataset.media = item.mediaType || 'video';
+    const title = cleanDisplayText(item.displayTitle || item.title) || (item.mediaType === 'image' ? `Foto ${index + 1}` : item.mediaType === 'audio' ? 'Áudio' : `Vídeo ${index + 1}`);
     const resolution = formatResolution(item.width, item.height) || (item.height ? `${item.height}p` : '');
     const duration = formatDuration(item.duration);
-    const host = sourceHost(item.pageUrl || item.url) || sourceHost(item.url) || 'Fonte de vídeo';
+    const host = sourceHost(item.pageUrl || item.url) || sourceHost(item.url) || 'Fonte de mídia';
     const sourceLabel = item.label ? `${host} · ${item.label}` : host;
+    const hdClass = /^(?:HD|Full HD|2K|4K|Original)/.test(item.qualityLabel || '') ? ' vdd-chip-hd' : '';
     const chips = [
       `<span class="vdd-badge">${escapeHtml(item.kind)}</span>`,
-      resolution && !(item.height && !item.width) ? `<span class="vdd-meta-chip">${escapeHtml(resolution)}</span>` : '',
+      item.qualityLabel && item.mediaType !== 'audio' ? `<span class="vdd-badge${hdClass}">${escapeHtml(item.qualityLabel)}</span>` : '',
+      resolution && !(item.height && !item.width) && item.mediaType !== 'zip' ? `<span class="vdd-meta-chip">${escapeHtml(resolution)}</span>` : '',
+      item.mediaType === 'zip' ? `<span class="vdd-meta-chip">${Number(item.imageCount || item.images?.length || 0)} imagens</span>` : '',
       item.hasAudio === false ? '<span class="vdd-meta-chip">Fonte informa: sem áudio</span>' : '',
       item.noWatermark === true ? '<span class="vdd-meta-chip">Sem marca d’água · fonte</span>' : '',
-      item.preferred ? '<span class="vdd-badge preferred">Preferida</span>' : '',
+      item.preferred ? '<span class="vdd-badge preferred">Melhor opção</span>' : '',
     ].filter(Boolean).join('');
+
+    const hdWord = /^(?:HD|Full HD|2K|4K|Original)/.test(item.qualityLabel || '');
+    const mainLabel = item.mediaType === 'zip' ? `Baixar as ${Number(item.imageCount || item.images?.length || 0)} fotos · ZIP`
+      : item.mediaType === 'image' ? `Baixar imagem${hdWord ? ' em HD' : ''}`
+      : item.mediaType === 'audio' ? 'Baixar MP3'
+      : item.kind === 'HLS' ? 'Ver qualidades'
+      : `Baixar ${item.qualityLabel && item.qualityLabel !== 'SD' ? `${escapeHtml(item.qualityLabel)} · ` : ''}${escapeHtml(item.kind || 'vídeo')}`;
+    const mainClass = item.mediaType === 'zip' ? ' vdd-btn-zip' : item.mediaType === 'image' ? ' vdd-btn-img' : item.mediaType === 'audio' ? ' vdd-btn-mp3' : '';
+    const fallbackIcon = item.mediaType === 'audio' ? NOTE_SVG : item.mediaType === 'image' || item.mediaType === 'zip' ? IMAGE_SVG : VIDEO_SVG;
+    const canMp3 = !item.mediaType && item.hasAudio !== false;
+    const subRow = canMp3
+      ? `<div class="vdd-actions vdd-actions-sub"${item.kind === 'HLS' ? ' hidden' : ''}><button class="vdd-btn vdd-btn-ghost vdd-btn-mp3 vdd-btn-mp3-sub" type="button">Extrair áudio em MP3</button>${mp3QualitySelect()}</div>`
+      : item.mediaType === 'audio' ? `<div class="vdd-actions vdd-actions-sub"><label class="vdd-mp3q-label">Se precisar converter:${mp3QualitySelect()}</label></div>` : '';
 
     card.innerHTML = `
       <div class="vdd-card-top">
         <div class="vdd-thumb">
-          <div class="vdd-thumb-fallback" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 5 17.5zm5.2 2.1v6.8a.6.6 0 0 0 .9.5l5.2-3.4a.6.6 0 0 0 0-1l-5.2-3.4a.6.6 0 0 0-.9.5z"/></svg></div>
+          <div class="vdd-thumb-fallback" aria-hidden="true">${fallbackIcon}</div>
           ${duration ? `<span class="vdd-duration">${escapeHtml(duration)}</span>` : ''}
         </div>
         <div class="vdd-main">
@@ -1920,8 +2154,9 @@
       <div class="vdd-res" hidden></div>
       ${item.kind === 'HLS' ? '<div class="vdd-quality-wrap"><label class="vdd-field-label" hidden>Qualidade<select class="vdd-quality" aria-label="Qualidade do vídeo" hidden></select></label><label class="vdd-audio-label vdd-field-label" hidden>Faixa de áudio<select class="vdd-audio" aria-label="Faixa de áudio"></select></label><label class="vdd-silent-label" hidden><input type="checkbox" class="vdd-allow-silent"> Permitir vídeo sem áudio, se a fonte for muda</label><div class="vdd-quality-note"></div><button type="button" class="vdd-quality-refresh" hidden>Atualizar qualidades</button></div>' : ''}
       <div class="vdd-actions">
-        <button class="vdd-btn" type="button">${item.kind === 'HLS' ? 'Ver qualidades' : `Baixar ${escapeHtml(item.kind || 'vídeo')}`}</button>
+        <button class="vdd-btn${mainClass}" type="button">${mainLabel}</button>
       </div>
+      ${subRow}
       <button type="button" class="vdd-cancel" hidden>Cancelar</button>
       <div class="vdd-progress">
         <div class="vdd-progress-line"><div class="vdd-progress-bar"></div></div>
@@ -1930,14 +2165,18 @@
     `;
 
     const thumb = card.querySelector('.vdd-thumb');
-    const thumbnail = normalizeThumbUrl(item.thumbnail || '');
+    const thumbnail = normalizeThumbUrl(item.thumbnail || (item.mediaType === 'image' ? item.url : ''));
     if (thumbnail) loadThumbInto(thumb, thumbnail, item.pageUrl || '');
 
-    if (item.height) setResolutionChips(card, [item.height], Number(item.height));
-    attachDownloadHandler(card, { ...item, sourceScope }, title);
+    if (item.height && !item.mediaType) setResolutionChips(card, [item.height], Number(item.height));
+    attachDownloadHandler(card, { ...item, sourceScope }, item.fileBase || title);
     return card;
   }
 
+  // ---------------------------------------------------------------------------
+  // Download queue
+  // Runs one download at a time and queues the rest.
+  // ---------------------------------------------------------------------------
   const DL_QUEUE = [];
   function dlQueueRefresh() { DL_QUEUE.forEach((entry, i) => entry.show(i + 1, DL_QUEUE.length)); }
   function dlQueuePush(entry) { DL_QUEUE.push(entry); dlQueueRefresh(); return DL_QUEUE.length; }
@@ -1952,14 +2191,30 @@
     return false;
   }
 
-  function attachDownloadHandler(card, item, title) {
+  // ---------------------------------------------------------------------------
+  // Download handler
+  // Connects a card to the right download path, with progress, cancel and queueing.
+  // ---------------------------------------------------------------------------
+  function attachDownloadHandler(card, item, titleArg) {
+    const titleNow = () => (typeof titleArg === 'function' ? titleArg() : titleArg);
     const button = card.querySelector('.vdd-btn');
+    const mp3Button = card.querySelector('.vdd-btn-mp3-sub');
+    const mp3Select = card.querySelector('.vdd-mp3q');
+    const mp3Default = mp3Button?.textContent || '';
+    let mode = 'video', queuedMode = 'video';
+    let pendingSave = null;
+    let pendingOpen = null;
+    const labelBtn = () => (mode === 'mp3' && mp3Button ? mp3Button : button);
+    const setBusy = busy => {
+      button.disabled = busy;
+      if (mp3Button) mp3Button.disabled = busy || Boolean(pendingSave) || Boolean(pendingOpen);
+      button.classList.toggle('vdd-wait', busy && labelBtn() !== button);
+      mp3Button?.classList.toggle('vdd-wait', busy && labelBtn() !== mp3Button);
+    };
     const progress = card.querySelector('.vdd-progress');
     const bar = card.querySelector('.vdd-progress-bar');
     const text = card.querySelector('.vdd-progress-text');
     const defaultButtonText = button.textContent;
-    let pendingSave = null;
-    let pendingOpen = null;
     let hlsInfo = null;
     const qualitySelect = card.querySelector('.vdd-quality');
     const qualityNote = card.querySelector('.vdd-quality-note');
@@ -1968,7 +2223,7 @@
     const audioSelect = card.querySelector('.vdd-audio');
     let audioOptions = [];
     const lockChoices = locked => {
-      for (const element of card.querySelectorAll('.vdd-quality, .vdd-audio, .vdd-allow-silent, .vdd-quality-refresh, .vdd-res button')) element.disabled = locked;
+      for (const element of card.querySelectorAll('.vdd-quality, .vdd-audio, .vdd-allow-silent, .vdd-quality-refresh, .vdd-res button, .vdd-mp3q')) element.disabled = locked;
     };
     const updateAudioOptions = () => {
       const chosen = qualitySelect.value === 'auto' ? hlsInfo.variants[0] : hlsInfo.variants[Number(qualitySelect.value)];
@@ -2022,6 +2277,7 @@
         `${hlsInfo.media.endList ? 'Vídeo' : 'Trecho ao vivo disponível'} · ${formatDuration(hlsInfo.media.duration)} · resolução não informada na playlist`;
       updateCodecNote();
       button.textContent = 'Baixar';
+      card.querySelector('.vdd-actions-sub')?.removeAttribute('hidden');
     };
     refreshQuality?.addEventListener('click', async () => {
       if (APP.working || APP.linkBusy) return;
@@ -2036,8 +2292,8 @@
       start() { onDownloadClick(true); },
     };
     const leaveQueue = () => {
-      queued = false; delete card.dataset.dl;
-      button.disabled = false; button.textContent = item.kind === 'HLS' && hlsInfo ? 'Baixar' : defaultButtonText;
+      queued = false; delete card.dataset.dl; mode = 'video';
+      setBusy(false); button.textContent = item.kind === 'HLS' && hlsInfo ? 'Baixar' : defaultButtonText; if (mp3Button) mp3Button.textContent = mp3Default;
       lockChoices(Boolean(pendingSave)); progress.classList.remove('show'); text.dataset.state = ''; if (cancel) cancel.hidden = true;
     };
     cancel?.addEventListener('click', () => {
@@ -2045,13 +2301,14 @@
       APP.hlsController?.abort(); APP.directController?.abort();
     });
 
-    const onDownloadClick = async (fromQueue = false) => {
-      if (queued && !fromQueue) { toast('Este vídeo já está na fila'); return; }
+    const onDownloadClick = async (fromQueue = false, requestedMode = null) => {
+      const wanted = fromQueue ? queuedMode : (requestedMode || 'video');
+      if (queued && !fromQueue) { toast('Este item já está na fila'); return; }
       if (fromQueue) queued = false;
       if (APP.working || APP.linkBusy) {
         const ready = !pendingOpen && !pendingSave && (item.kind !== 'HLS' || Boolean(hlsInfo));
         if (ready && !APP.linkBusy && !fromQueue) {
-          queued = true; card.dataset.dl = 'queued'; button.disabled = true; button.textContent = 'Na fila';
+          queued = true; queuedMode = wanted; mode = wanted; card.dataset.dl = 'queued'; setBusy(true); labelBtn().textContent = 'Na fila';
           progress.classList.add('show'); lockChoices(true); if (cancel) cancel.hidden = false;
           toast(`Adicionado à fila · posição ${dlQueuePush(queueEntry)}`);
           return;
@@ -2061,13 +2318,14 @@
       }
 
       if (item.kind === 'HLS' && !hlsInfo && !pendingSave) {
-        APP.working = true; button.disabled = true; button.textContent = 'Lendo qualidades...';
+        APP.working = true; setBusy(true); button.textContent = 'Lendo qualidades...';
         try { await loadQualities(); } catch (error) { qualityNote.textContent = error.message; button.textContent = defaultButtonText; }
-        finally { APP.working = false; button.disabled = false; dlQueueNext(); }
+        finally { APP.working = false; setBusy(false); dlQueueNext(); }
         return;
       }
+      mode = wanted;
       APP.working = true;
-      button.disabled = true;
+      setBusy(true);
       progress.classList.add('show');
       lockChoices(true);
       card.dataset.dl = 'running';
@@ -2087,7 +2345,7 @@
           toast(msg, 4200);
         } finally {
           APP.working = false;
-          button.disabled = false; lockChoices(Boolean(pendingSave));
+          setBusy(false); lockChoices(Boolean(pendingSave));
           dlQueueNext();
         }
         return;
@@ -2133,7 +2391,7 @@
           toast(msg, 4200);
         } finally {
           APP.working = false;
-          button.disabled = false; lockChoices(Boolean(pendingSave));
+          setBusy(false); lockChoices(Boolean(pendingSave));
           dlQueueNext();
         }
         return;
@@ -2142,11 +2400,20 @@
       const previousRequestReferrer = APP.requestReferrer;
       APP.requestReferrer = safeHttpUrl(item.pageUrl || '') || location.href;
 
+      OUTPUT.mode = mode === 'mp3' ? 'mp3' : 'video';
+      OUTPUT.kbps = Number(mp3Select?.value) || OUTPUT.kbps; OUTPUT.title = item.audioTitle || ''; OUTPUT.artist = item.audioArtist || ''; OUTPUT.signal = null;
       try {
-        if (item.kind !== 'HLS') {
+        if (item.mediaType) {
+          setProgress(bar, text, 8, item.mediaType === 'zip' ? 'Preparando as fotos...' : 'Preparando...');
+          APP.directController = new AbortController(); OUTPUT.signal = APP.directController.signal; if (cancel) cancel.hidden = false;
+          await downloadAssetItem(item, titleNow(), {
+            signal: APP.directController.signal,
+            onProgress(percent, label, detail) { setProgress(bar, text, percent, label, detail); }
+          });
+        } else if (item.kind !== 'HLS') {
           setProgress(bar, text, 8, 'Validando a fonte...');
-          APP.directController = new AbortController(); if (cancel) cancel.hidden = false;
-          await downloadPublicItem(item, title, {
+          APP.directController = new AbortController(); OUTPUT.signal = APP.directController.signal; if (cancel) cancel.hidden = false;
+          await downloadPublicItem(item, titleNow(), {
             signal: APP.directController.signal,
             allowPageFallback: item.sourceScope !== 'link',
             sessionLink: isSessionLinkItem(item),
@@ -2157,7 +2424,7 @@
         } else {
           if (cancel) cancel.hidden = false;
           const hlsOptions = () => ({
-            filenameBase: title,
+            filenameBase: titleNow(),
             audioSelection: audioSelect.value === 'auto' ? null : audioOptions[Number(audioSelect.value)],
             allowSilent: card.querySelector('.vdd-allow-silent').checked,
             pageUrl: item.pageUrl,
@@ -2223,17 +2490,28 @@
         if (isSessionLinkItem(item) && item.pageUrl && ([401, 403, 404, 410, 412].includes(directErrorStatus(error)) || error?.hlsRefusedAll)) appendOpenPageHint(text, item.pageUrl);
         toast(msg, 3600);
       } finally {
+        OUTPUT.mode = 'video'; OUTPUT.signal = null; mode = 'video';
         APP.requestReferrer = previousRequestReferrer;
         APP.directController = null;
         if (cancel) cancel.hidden = true;
         APP.working = false;
-        button.disabled = false; lockChoices(Boolean(pendingSave));
+        setBusy(false); lockChoices(Boolean(pendingSave));
         dlQueueNext();
       }
     };
     button.addEventListener('click', () => onDownloadClick(false));
+    mp3Button?.addEventListener('click', () => onDownloadClick(false, 'mp3'));
+    mp3Select?.addEventListener('change', () => {
+      const value = Number(mp3Select.value); if (!MP3_BITRATES.includes(value)) return;
+      OUTPUT.kbps = value; PREFS.set('mp3.kbps', value);
+      for (const other of document.querySelectorAll('#vdd-root .vdd-mp3q')) if (other !== mp3Select) other.value = String(value);
+    });
   }
 
+  // ---------------------------------------------------------------------------
+  // Public link extraction
+  // Reads media candidates out of public page HTML and embedded JSON.
+  // ---------------------------------------------------------------------------
   function decodeEmbeddedUrl(value) {
     const raw = String(value || '').trim();
     if (!raw) return '';
@@ -2595,10 +2873,31 @@
     let host = '';
     try { host = new URL(url).hostname.toLowerCase(); } catch {}
     if (/(?:^|\.)(?:youtube\.com|youtu\.be|youtube-nocookie\.com|googlevideo\.com)$/.test(host)) {
-      return 'YouTube: use apenas as opções de download oferecidas pelo próprio YouTube ou YouTube Studio.';
+      return 'YouTube: na aba “Por link”, cole o link do vídeo ou Short (usa o seu Worker + Cobalt). A detecção automática de mídia dentro do site do YouTube continua desligada; para conteúdo próprio, considere também o YouTube Studio e o Google Takeout.';
+    }
+    if (/(?:^|\.)(?:spotify\.com|deezer\.com|tidal\.com|music\.apple\.com|music\.amazon\.[a-z.]+|music\.youtube\.com|napster\.com|qobuz\.com)$/.test(host)) {
+      return 'Serviços de streaming de música usam proteção (DRM) e licenças próprias: baixe apenas pelas opções oficiais do serviço. Links de arquivos MP3/M4A públicos e músicas de TikTok funcionam normalmente.';
     }
     return '';
   }
+
+  // ---------------------------------------------------------------------------
+  // Link probing
+  // YouTube link detection, private-network guard, and fetching of pasted links and pages.
+  // ---------------------------------------------------------------------------
+  const YT_LINK_HOST = /^(?:www\.|m\.)?(?:youtube\.com|youtube-nocookie\.com)$/i;
+  function youtubeLink(url) {
+    let u; try { u = new URL(url); } catch { return null; }
+    if (u.protocol !== 'https:') return null;
+    const host = u.hostname.toLowerCase(); let id = '', short = false;
+    if (host === 'youtu.be') id = u.pathname.split('/')[1] || '';
+    else if (YT_LINK_HOST.test(host)) {
+      const m = u.pathname.match(/^\/(shorts|embed|live|v)\/([\w-]{11})(?:\/|$)/);
+      if (m) { id = m[2]; short = m[1] === 'shorts'; } else if (u.pathname === '/watch') id = u.searchParams.get('v') || '';
+    } else return null;
+    return /^[\w-]{11}$/.test(id) ? { id, short, name: 'YouTube', kind: 'youtube' } : null;
+  }
+  const youtubeEnabled = () => LINK_PROXY_YOUTUBE && Boolean(String(LINK_PROXY || '').trim());
 
   function isPrivateNetworkUrl(url) {
     try {
@@ -2688,7 +2987,9 @@
     const sample = new TextDecoder().decode(response.bytes.subarray(0, 2048));
     if (/^\s*#EXTM3U(?:\s|$)/.test(sample)) return { kind: 'HLS', url: finalUrl, contentType: 'application/vnd.apple.mpegurl', confirmed: true };
     const format = detectMediaFormatFromBytes(response.bytes, contentType, finalUrl);
-    if (format?.confirmed && !format.hls) return { kind: format.label, url: finalUrl, contentType: format.mime, confirmed: true };
+    if (format?.confirmed && !format.hls && !isAudioUrl(finalUrl, contentType)) return { kind: format.label, url: finalUrl, contentType: format.mime, confirmed: true };
+    const audioFormat = sniffAudio(response.bytes, contentType);
+    if (audioFormat && !looksLikeHtmlBytes(response.bytes) && (!audioFormat.container || isAudioUrl(finalUrl, contentType))) return { audio: true, kind: 'MP3', url: finalUrl, contentType: audioFormat.mime, confirmed: true };
     if (looksLikeHtmlBytes(response.bytes) || responseLooksLikeHtml(contentType) || /^\s*[\[{<]/.test(sample)) return { page: true, url: finalUrl, contentType };
     if (isHls(finalUrl, contentType)) return { kind: 'HLS', url: finalUrl, contentType, confirmed: false };
     const disposition = contentDispositionFilename(response.headers['content-disposition']);
@@ -2711,18 +3012,44 @@
     return promise;
   }
 
+  // ---------------------------------------------------------------------------
+  // Social links
+  // TikTok and Instagram: URL parsing and extraction of video, photo and audio candidates.
+  // ---------------------------------------------------------------------------
+  const TIKTOK_HOST = /(?:^|\.)(?:tiktok\.com|tiktokv\.com|tiktokv\.us|tiktokv\.eu)$/;
+  const INSTAGRAM_HOST = /(?:^|\.)(?:instagram\.com|instagr\.am)$/;
   function publicPlatform(url) {
     let parsed; try { parsed = new URL(url); } catch { return null; }
-    const host = parsed.hostname.toLowerCase();
-    if (/(^|\.)tiktok\.com$/.test(host)) return { name: 'TikTok', kind: 'tiktok', id: parsed.pathname.match(/\/(?:video|player\/v1|embed\/v2)\/(\d+)/)?.[1] || '' };
-    if (/(^|\.)instagram\.com$/.test(host)) return { name: 'Instagram', kind: 'instagram', id: parsed.pathname.match(/\/(?:p|reels?|tv)\/([\w-]+)/)?.[1] || '' };
+    const host = parsed.hostname.toLowerCase(), path = parsed.pathname;
+    if (TIKTOK_HOST.test(host)) {
+      const media = path.match(/\/(video|photo)\/(\d{6,})/) || path.match(/\/(?:player\/v1|embed\/v2|embed|v|share\/video|share\/photo|share\/slideshow|share\/item)\/(\d{6,})/);
+      const music = path.match(/\/music\/(?:[^/]*?-)?(\d{6,})\/?$/);
+      const query = parsed.searchParams.get('item_id') || parsed.searchParams.get('share_item_id') || parsed.searchParams.get('aweme_id') || '';
+      const id = media ? media[media.length - 1] : (/^\d{6,}$/.test(query) ? query : '');
+      const short = !id && !music && (/^(?:vm|vt|vn|link)\.tiktok\.com$/.test(host) || /^\/t\/[\w-]{4,}\/?$/.test(path));
+      return { name: 'TikTok', kind: 'tiktok', id: music ? music[1] : id, post: media && media.length === 3 ? media[1] : '', music: Boolean(music), short };
+    }
+    if (INSTAGRAM_HOST.test(host)) {
+      const media = path.match(/\/(?:p|reels?|tv)\/([\w-]{5,})/) || path.match(/\/share\/(?:p|reels?|tv)\/([\w-]{5,})/);
+      const story = /^\/stories\//.test(path);
+      return { name: 'Instagram', kind: 'instagram', id: media ? media[1] : '', story, short: !media && /^\/share\/[\w-]{5,}\/?$/.test(path) };
+    }
     return null;
   }
 
+  const BARE_PLATFORM_LINK = /(?:^|[\s(<"“])((?:[a-z0-9-]+\.)*(?:tiktok\.com|tiktokv\.com|instagram\.com|instagr\.am|youtube\.com|youtube-nocookie\.com|youtu\.be)\/[^\s<>"“”]*)/i;
   function pastedPublicUrl(value) {
     const decoded = decodeEmbeddedUrl(String(value || '').trim());
-    const matches = decoded.match(/https?:\/\/[^\s<>"“”]+/gi) || [];
-    if (matches.length !== 1) throw mediaError(matches.length ? 'Cole apenas um link por vez.' : 'Cole um link público começando com https://.', 'MEDIA_INPUT');
+    let matches = decoded.match(/https?:\/\/[^\s<>"“”]+/gi) || [];
+    if (!matches.length) {
+      const bare = decoded.match(BARE_PLATFORM_LINK);
+      if (bare) matches = [`https://${bare[1]}`];
+    }
+    if (matches.length > 1) {
+      const supported = matches.filter(link => publicPlatform(link) || youtubeLink(link));
+      if (supported.length === 1) matches = supported;
+    }
+    if (matches.length !== 1) throw mediaError(matches.length ? 'Cole apenas um link por vez.' : 'Cole um link público (https://…) de vídeo, foto, música ou página.', 'MEDIA_INPUT');
     const url = matches[0];
     return assertMediaUrl(new URL(decoded === url || url.includes('?') ? url : url.replace(/[),.;!]+$/, '')).href);
   }
@@ -2775,9 +3102,24 @@
     return sourceUrlList(value.UrlList || value.urlList || value.url_list || value.src || value.url || value.Url || []);
   }
 
-  function extractSocialCandidates(doc, pageUrl, rawText = '', expected = publicPlatform(pageUrl)) {
+  function hdLabel(width, height) {
+    const w = Number(width || 0), h = Number(height || 0), side = w && h ? Math.min(w, h) : (w || h);
+    if (!side) return '';
+    return side >= 2160 ? '4K' : side >= 1440 ? '2K' : side >= 1080 ? 'Full HD' : side >= 720 ? 'HD' : 'SD';
+  }
+  function imageQualityLabel(width, height) {
+    const longest = Math.max(Number(width || 0), Number(height || 0));
+    return longest >= 2000 ? 'Original · alta' : longest >= 1080 ? 'HD' : '';
+  }
+  function bestImageUrls(urls) {
+    const score = url => /\.jpe?g(?:$|[?~#&])|image\.jpeg/i.test(url) ? 3 : /\.png(?:$|[?~#&])/i.test(url) ? 2.5 : /\.webp(?:$|[?~#&])|image\.webp/i.test(url) ? 2 : /\.(?:heic|avif)(?:$|[?~#&])/i.test(url) ? 1 : 1.5;
+    return urls.map((url, index) => [url, index]).sort((x, y) => score(y[0]) - score(x[0]) || x[1] - y[1]).map(entry => entry[0]);
+  }
+
+  function extractSocialCandidates(doc, pageUrl, rawText = '', expected = publicPlatform(pageUrl), options = {}) {
     if (!expected) return [];
-    const documents = jsonDocuments(doc, rawText), items = [], results = [];
+    const wantAssets = options.assets === true;
+    const documents = jsonDocuments(doc, rawText), items = [], results = [], images = [], audios = [];
     const title = doc.querySelector('meta[property="og:title"]')?.content || doc.title || expected.name;
     const add = (value, metadata, quality = {}) => {
       const urls = [...new Set(sourceUrlList(value).map(raw => safeHttpUrl(decodeEmbeddedUrl(raw), pageUrl)).filter(url => url && !isPrivateNetworkUrl(url)))];
@@ -2795,20 +3137,40 @@
           width, height, duration: Number(metadata.duration || 0), bandwidth, codec, sourceKey,
           postId: metadata.postId, platform: expected.kind, sourceRole: metadata.role, trusted: true, sourceScope: 'link',
           noWatermark: metadata.noWatermark === true, hasAudio: metadata.hasAudio,
+          qualityLabel: hdLabel(width, height),
           label: metadata.noWatermark ? 'Original sem marca publicado' : (metadata.role === 'playback' ? 'Reprodução publicada' : 'Arquivo publicado'),
           score: metadata.role === 'playback' ? 120 : 110, alternatives: urls.filter(url => url !== urls[i]), detectedAt: Date.now() });
       }
     };
+    const addImage = (urlsRaw, metadata, width = 0, height = 0) => {
+      const urls = bestImageUrls([...new Set(urlsRaw.map(raw => safeHttpUrl(decodeEmbeddedUrl(raw), pageUrl)).filter(url => url && !isPrivateNetworkUrl(url)))]);
+      if (!urls.length) return;
+      images.push({ kind: 'IMAGEM', mediaType: 'image', type: 'image/jpeg', url: urls[0], alternatives: urls.slice(1, 3), pageUrl,
+        title: cleanDisplayText(metadata.title || title), thumbnail: urls[0], width: Number(width || 0), height: Number(height || 0),
+        postId: metadata.postId, platform: expected.kind, trusted: true, sourceScope: 'link', detectedAt: Date.now(),
+        qualityLabel: imageQualityLabel(width, height) || 'Melhor qualidade', label: 'Imagem publicada', score: 100 });
+    };
+    const addAudio = (music, metadata) => {
+      const urls = [...new Set(sourceUrlList(music.playUrl || music.play_url || music.playAddr || music.audioUrl).map(raw => safeHttpUrl(decodeEmbeddedUrl(raw), pageUrl)).filter(url => url && !isPrivateNetworkUrl(url)))];
+      if (!urls.length) return;
+      const name = cleanDisplayText([music.title, music.authorName || music.author].filter(Boolean).join(' — ')) || 'Áudio';
+      audios.push({ kind: 'MP3', mediaType: 'audio', type: 'audio/mpeg', url: urls[0], alternatives: urls.slice(1, 3), pageUrl, title: name,
+        audioTitle: cleanDisplayText(music.title || ''), audioArtist: cleanDisplayText(music.authorName || music.author || ''),
+        thumbnail: safeHttpUrl(sourceUrlList(music.coverLarge || music.coverMedium || music.coverThumb || music.cover_large)[0] || '', pageUrl),
+        duration: Number(music.duration || metadata.duration || 0), postId: metadata.postId || String(music.id || ''), platform: expected.kind,
+        trusted: true, sourceScope: 'link', detectedAt: Date.now(), qualityLabel: 'MP3',
+        label: music.original ? 'Som original do vídeo' : 'Música', score: 90, sourceKey: `${metadata.postId || music.id}:audio` });
+    };
     if (expected.kind === 'tiktok') {
       walkPublicData(documents, value => {
         const id = String(value.id || value.aweme_id || '');
-        if (value.video && id && (!expected.id || id === expected.id)) items.push(value);
+        if ((value.video || value.imagePost) && id && (!expected.id || id === expected.id)) items.push(value);
       });
       if (!expected.id && new Set(items.map(item => String(item.id || item.aweme_id))).size !== 1) return [];
       for (const item of items) {
-        const video = item.video, id = String(item.id || item.aweme_id);
-        const common = { postId: id, title: item.desc || title, width: video.width, height: video.height,
-          duration: video.duration, thumbnail: sourceUrlList(video.cover || video.originCover)[0],
+        const video = item.video || {}, id = String(item.id || item.aweme_id);
+        const common = { postId: id, title: item.desc || item.imagePost?.title || title, width: video.width, height: video.height,
+          duration: video.duration, thumbnail: sourceUrlList(video.cover || video.originCover || item.imagePost?.cover?.imageURL || item.imagePost?.shareCover)[0],
           hasAudio: typeof video.hasAudio === 'boolean' ? video.hasAudio : undefined };
         add(video.playAddr || video.play_addr, { ...common, role: 'playback' });
         add(video.downloadAddr || video.download_addr, { ...common, role: 'download' });
@@ -2817,10 +3179,26 @@
           add(addr, { ...common, width: 0, height: 0, role: 'playback' }, { ...rate, ...(addr && typeof addr === 'object' ? addr : {}) });
         }
         add(video.noWatermarkUrl || video.no_watermark_url || video.playAddrNoWatermark, { ...common, role: 'playback', noWatermark: true });
+        if (wantAssets) {
+          for (const photo of item.imagePost?.images || item.image_post_info?.images || []) {
+            addImage(sourceUrlList(photo.imageURL || photo.image_url || photo.display_image || photo.imageUrl), { ...common, postId: id }, photo.imageWidth || photo.width, photo.imageHeight || photo.height);
+          }
+          if (item.music) addAudio(item.music, common);
+        }
+      }
+      if (wantAssets && expected.music) {
+        const seen = new Set();
+        walkPublicData(documents, value => {
+          const music = value.musicInfo?.music || (value.playUrl && value.title && (value.authorName || value.author) && String(value.id || '') === expected.id ? value : null);
+          if (music && !seen.has(music)) { seen.add(music); addAudio(music, { postId: expected.id }); }
+        });
       }
     } else {
       const all = [];
-      walkPublicData(documents, value => { if (value.video_url || value.video_versions || value.video_resources || value.carousel_media || value.edge_sidecar_to_children) all.push(value); });
+      walkPublicData(documents, value => {
+        if (value.video_url || value.video_versions || value.video_resources || value.carousel_media || value.edge_sidecar_to_children ||
+          (wantAssets && (value.image_versions2 || value.display_url || value.display_resources) && (value.shortcode || value.code))) all.push(value);
+      });
       const exact = expected.id ? all.filter(value => String(value.shortcode || value.code || '') === expected.id) : [];
       const unidentified = all.filter(value => !value.shortcode && !value.code);
       const roots = exact.length ? exact : !expected.id ? (all.length === 1 ? all : []) : unidentified.length === 1 ? unidentified : [];
@@ -2832,14 +3210,29 @@
           width: value.dimensions?.width, height: value.dimensions?.height,
           duration: value.video_duration, thumbnail: value.display_url || value.thumbnail_src || value.image_versions2?.candidates?.[0]?.url,
           hasAudio: typeof value.has_audio === 'boolean' ? value.has_audio : undefined, role: 'playback' };
+        const hasVideo = value.is_video === true || Boolean(value.video_url) || Boolean(value.video_versions?.length) || Boolean(value.video_resources?.length);
         if (value.is_video !== false) {
           add(value.video_url, common);
           for (const version of value.video_versions || value.video_resources || []) add(version.url || version.src, common, version);
+        }
+        if (wantAssets && !hasVideo) {
+          const sizes = [];
+          for (const c of value.image_versions2?.candidates || []) sizes.push({ url: c.url, width: c.width, height: c.height });
+          for (const c of value.display_resources || []) sizes.push({ url: c.src || c.url, width: c.config_width || c.width, height: c.config_height || c.height });
+          if (value.display_url) sizes.push({ url: value.display_url, width: value.dimensions?.width, height: value.dimensions?.height });
+          sizes.sort((x, y) => (Number(y.width || 0) * Number(y.height || 0)) - (Number(x.width || 0) * Number(x.height || 0)));
+          const usable = sizes.filter(size => size.url);
+          if (usable.length) addImage(usable.map(size => size.url), common, usable[0].width, usable[0].height);
         }
         for (const child of value.carousel_media || []) consume(child, id);
         for (const child of value.edge_sidecar_to_children?.edges || []) consume(child.node, id);
       };
       roots.forEach(value => consume(value));
+      if (wantAssets && !results.length && !images.length && expected.id && !/\/(?:reels?|tv)\//.test(new URL(pageUrl).pathname) &&
+        !doc.querySelector('meta[property^="og:video"]') && !/"is_video"\s*:\s*true|"video_versions"/.test(rawText || '')) {
+        const og = doc.querySelector('meta[property="og:image"]')?.content;
+        if (og) addImage([og], { postId: expected.id, title }, 0, 0);
+      }
     }
     const unique = new Map();
     for (const candidate of results.sort(compareMediaQuality)) {
@@ -2852,11 +3245,33 @@
       if (previous) previous.alternatives = [...new Set([...previous.alternatives, candidate.url, ...candidate.alternatives])].filter(url => url !== previous.url);
       else qualities.set(candidate.sourceKey, candidate);
     }
-    return [...qualities.values()].sort(compareMediaQuality);
+    const videos = [...qualities.values()].sort(compareMediaQuality);
+    if (!wantAssets) return videos;
+    const seenImage = new Set(), photos = [];
+    for (const image of images) { const key = mediaIdentityKey(image.url, 'IMAGEM'); if (!seenImage.has(key)) { seenImage.add(key); photos.push(image); } }
+    photos.forEach((image, index) => {
+      image.imageIndex = index + 1; image.imageCount = photos.length;
+      image.sourceKey = `${image.postId}:img:${index + 1}`;
+      if (photos.length > 1) { image.title = `Foto ${index + 1} de ${photos.length} · ${image.title}`; image.label = `Imagem ${index + 1}/${photos.length}`; }
+      image.fileBase = `${expected.kind}-${image.postId}-${String(index + 1).padStart(2, '0')}`;
+    });
+    const out = [];
+    if (photos.length > 1) {
+      const first = photos[0];
+      out.push({ kind: 'ZIP', mediaType: 'zip', url: `${String(pageUrl).split('#')[0]}#optdowns-zip`, pageUrl, title: `Todas as ${photos.length} fotos · ${cleanDisplayText(title)}`,
+        thumbnail: first.thumbnail, platform: expected.kind, postId: first.postId, trusted: true, sourceScope: 'link', detectedAt: Date.now(),
+        imageCount: photos.length, images: photos.map(image => ({ url: image.url, alternatives: image.alternatives, imageIndex: image.imageIndex, width: image.width, height: image.height })),
+        qualityLabel: 'Melhor qualidade', label: 'Todas as fotos em um arquivo', score: 130, sourceKey: `${first.postId}:zip`, fileBase: `${expected.kind}-${first.postId}-fotos` });
+    }
+    out.push(...videos, ...photos);
+    for (const audio of audios.slice(0, 1)) { audio.fileBase = cleanFilenameBase(audio.title) || `${expected.kind}-${audio.postId}-audio`; out.push(audio); }
+    return out;
   }
 
+  // Resolves a TikTok or Instagram link into video, photo and audio candidates.
   async function resolveSocialLink(url, context = {}) {
     const initial = publicPlatform(url), visited = new Set();
+    if (initial.story) throw mediaError('Stories do Instagram exigem login e não são públicos. Abra o story no navegador, reproduza e use “Nesta página”.', 'MEDIA_LOGIN');
     let expected = initial, firstError = null, login = false, pagesRead = 0;
     const queue = [url];
     const all = [];
@@ -2876,27 +3291,31 @@
         if (canonicalPlatform?.kind === initial.kind && canonicalPlatform.id && (!expected.id || canonicalPlatform.id === expected.id)) expected = canonicalPlatform;
         login ||= /\/(?:accounts\/login|login|challenge)(?:\/|\?|$)/.test(response.finalUrl);
         const pageUrl = canonicalPlatform?.id === expected.id ? canonical : response.finalUrl;
-        const media = extractSocialCandidates(doc, pageUrl, response.text, expected);
+        const media = extractSocialCandidates(doc, pageUrl, response.text, expected, { assets: true });
         if (media.length) return media;
         const generic = extractPublicMediaCandidates(doc, response.finalUrl, { scanRawScripts: false });
         all.push(...generic.filter(item => !publicPlatform(item.url) && (isHls(item.url, item.type) || knownDirectFormatHint(item.url, item.type)))
           .map(item => ({ ...item, platform: initial.kind, postId: expected.id, pageUrl: url, detectedAt: Date.now() })));
         if (all.length) return all.sort(compareMediaQuality);
-        if (expected.id) {
+        if (expected.id && !expected.music) {
           const embed = initial.kind === 'tiktok' ? `https://www.tiktok.com/player/v1/${expected.id}` : `https://www.instagram.com/p/${expected.id}/embed/`;
           if (!visited.has(embed)) queue.push(embed);
         }
       } catch (error) {
         checkMediaAbort(context); firstError ||= error;
         if (error.status === 429 || error.code === 'MEDIA_CANCELLED') throw error;
-        if (expected.id && visited.size === 1) queue.push(initial.kind === 'tiktok' ? `https://www.tiktok.com/player/v1/${expected.id}` : `https://www.instagram.com/p/${expected.id}/embed/`);
+        if (expected.id && !expected.music && visited.size === 1) queue.push(initial.kind === 'tiktok' ? `https://www.tiktok.com/player/v1/${expected.id}` : `https://www.instagram.com/p/${expected.id}/embed/`);
       }
+    }
+    if (initial.kind === 'tiktok' && !initial.music && workerBase()) {
+      const viaWorker = await workerTikTokCandidates(url, context.signal).catch(error => { if (error.code === 'MEDIA_CANCELLED' || error.proxyFinal) throw error; return []; });
+      if (viaWorker.length) return viaWorker;
     }
     if (firstError && !pagesRead && ![401, 403, 404].includes(firstError.status)) throw firstError;
     const reason = [401, 403, 404, 410].includes(firstError?.status) && !pagesRead
       ? ` Motivo: ${firstError.status === 404 || firstError.status === 410 ? 'o vídeo não existe mais ou o link é privado' : `a plataforma bloqueou a leitura automática (HTTP ${firstError.status})`}.` : '';
     const error = mediaError(login ? `${initial.name} exigiu login e não publicou uma mídia acessível nesse link.` :
-      `${initial.name} não disponibilizou uma URL de vídeo legível nesta consulta.${reason} Abra o post no navegador, reproduza e use “Nesta página”.`, 'MEDIA_PUBLIC_UNAVAILABLE', firstError?.status || 0);
+      `${initial.name} não disponibilizou uma mídia legível (vídeo, foto ou áudio) nesta consulta.${reason} Abra o post no navegador, reproduza e use “Nesta página”.`, 'MEDIA_PUBLIC_UNAVAILABLE', firstError?.status || 0);
     error.cause = firstError; throw error;
   }
 
@@ -2909,6 +3328,10 @@
     return fresh;
   }
 
+  // ---------------------------------------------------------------------------
+  // Link renewal
+  // Re-reads the source page when a signed URL expires.
+  // ---------------------------------------------------------------------------
   const RENEWABLE_STATUS = Object.freeze([403, 404, 410, 412]);
   const isRenewableLinkError = error => RENEWABLE_STATUS.includes(directErrorStatus(error));
   const canRenewLinkItem = (item, error) => !item.platform && item.sourceScope === 'link' && Boolean(item.pageUrl) && isRenewableLinkError(error);
@@ -2960,7 +3383,12 @@
     return failure;
   }
 
+  // ---------------------------------------------------------------------------
+  // Public item downloads
+  // Downloads resolved social items straight from the browser.
+  // ---------------------------------------------------------------------------
   async function downloadPublicItemDirect(item, title, options) {
+    if (item.via === 'worker') return downloadDirectSmart(item.url, title, { ...options, retryAttempts: 2, allowPageFallback: false, typeHint: item.type || 'video/mp4', kindHint: item.kind || 'MP4' });
     let current = item;
     if (!item.platform && needsClassification(item)) {
       const found = await classifyMediaUrl(item.url, { referrer: item.pageUrl || item.url, publicOnly: true, sessionLink: true, signal: options.signal });
@@ -3036,6 +3464,10 @@
     throw platformDownloadError(current, firstError);
   }
 
+  // ---------------------------------------------------------------------------
+  // Worker client
+  // Talks to your optional Worker for TikTok and other sites and maps its errors to messages.
+  // ---------------------------------------------------------------------------
   const WORKER_REASONS = Object.freeze({
     HOST_NOT_ALLOWED: 'este site não está em ALLOWED_HOSTS do seu Worker (ou o Worker está só para TikTok)',
     NOT_CONFIGURED: 'o Worker não tem TOKEN_KEY definido',
@@ -3090,6 +3522,177 @@
     return `${note || error.message || 'falha'}${status && !note ? ` (HTTP ${status})` : ''}`;
   }
 
+  async function workerTikTokCandidates(pageUrl, signal) {
+    const base = workerBase(); if (!base) return [];
+    const url = `${base}/tt?url=${encodeURIComponent(pageUrl)}${LINK_PROXY_KEY ? `&key=${encodeURIComponent(LINK_PROXY_KEY)}` : ''}`;
+    let response;
+    try { response = await fetch(url, { cache: 'no-store', credentials: 'omit', signal }); }
+    catch (error) { if (signal?.aborted) throw mediaError('Busca cancelada.', 'MEDIA_CANCELLED'); return []; }
+    let body = null; try { body = await response.json(); } catch {}
+    if (!response.ok || !body?.ok) {
+      const final = PROXY_FINAL_CODES[body?.code];
+      if (final && body.code !== 'UNSUPPORTED_POST') { const error = mediaError(final, `PROXY_${body.code}`, response.status); error.proxyFinal = true; throw error; }
+      return [];
+    }
+    const origin = new URL(base).origin;
+    const own = raw => { try { const u = new URL(raw, `${base}/`); return u.origin === origin ? u.href : ''; } catch { return ''; } };
+    const common = { pageUrl, platform: 'tiktok', via: 'worker', trusted: true, sourceScope: 'link', detectedAt: Date.now(), postId: String(body.id || '') };
+    const cover = own(body.cover || '');
+    const title = cleanDisplayText(body.title || '') || 'TikTok';
+    const out = [];
+    const images = (Array.isArray(body.images) ? body.images : []).map((img, index) => ({ ...img, index: Number(img.index ?? index), url: own(img.url) })).filter(img => img.url);
+    if (images.length > 1) out.push({ ...common, kind: 'ZIP', mediaType: 'zip', url: `${String(pageUrl).split('#')[0]}#optdowns-zip`, title: `Todas as ${images.length} fotos · ${title}`, thumbnail: images[0].url,
+      imageCount: images.length, images: images.map(img => ({ url: img.url, alternatives: [], imageIndex: img.index + 1, width: img.width, height: img.height })), qualityLabel: 'Melhor qualidade',
+      label: 'Todas as fotos em um arquivo', score: 130, sourceKey: `${common.postId}:zip`, fileBase: `tiktok-${common.postId}-fotos` });
+    for (const video of Array.isArray(body.videos) ? body.videos : []) {
+      const href = own(video.url); if (!href) continue;
+      out.push({ ...common, kind: 'MP4', type: 'video/mp4', url: href, title, thumbnail: cover, width: Number(video.width || 0), height: Number(video.height || 0),
+        bandwidth: Number(video.bitrate || 0), duration: Number(body.duration || 0), codec: String(video.codec || ''), qualityLabel: video.label || hdLabel(video.width, video.height),
+        label: `Arquivo publicado · pelo Worker${video.codec ? ` · ${String(video.codec).toUpperCase()}` : ''}`, score: 100, sourceKey: `${common.postId}:w:${video.height || 0}:${video.bitrate || 0}` });
+    }
+    for (const img of images) out.push({ ...common, kind: 'IMAGEM', mediaType: 'image', type: 'image/jpeg', url: img.url, title: images.length > 1 ? `Foto ${img.index + 1} de ${images.length} · ${title}` : title,
+      thumbnail: img.url, width: Number(img.width || 0), height: Number(img.height || 0), imageIndex: img.index + 1, imageCount: images.length, qualityLabel: imageQualityLabel(img.width, img.height) || 'Melhor qualidade',
+      label: images.length > 1 ? `Imagem ${img.index + 1}/${images.length}` : 'Imagem publicada', score: 100, sourceKey: `${common.postId}:img:${img.index + 1}`, fileBase: `tiktok-${common.postId}-${String(img.index + 1).padStart(2, '0')}` });
+    const audioUrl = own(body.audio?.url || '');
+    if (audioUrl) out.push({ ...common, kind: 'MP3', mediaType: 'audio', type: 'audio/mpeg', url: audioUrl, title: cleanDisplayText([body.audio.title, body.audio.author].filter(Boolean).join(' — ')) || 'Áudio',
+      audioTitle: cleanDisplayText(body.audio.title || ''), audioArtist: cleanDisplayText(body.audio.author || ''), thumbnail: cover, duration: Number(body.audio.duration || 0), qualityLabel: 'MP3',
+      label: body.audio.original ? 'Som original do vídeo' : 'Música', score: 90, sourceKey: `${common.postId}:audio`, fileBase: cleanFilenameBase(`${body.audio.title || 'tiktok'}-${body.audio.author || ''}`) });
+    return out;
+  }
+
+  // ---------------------------------------------------------------------------
+  // YouTube
+  // Option lists, cards and downloads for YouTube through your Worker.
+  // ---------------------------------------------------------------------------
+  function ytSizeText(option) {
+    const bytes = Number(option?.sizeBytes || 0); if (!(bytes > 0)) return '';
+    const text = bytes >= 1073741824 ? `${(bytes / 1073741824).toFixed(2)} GB` : `${(bytes / 1048576).toFixed(1)} MB`;
+    return option.sizeKind === 'estimated' ? `≈ ${text} (estimado pela fonte)` : text;
+  }
+
+  async function workerYouTubeCandidates(pageUrl, signal, onStage) {
+    const base = workerBase(), parsed = youtubeLink(pageUrl);
+    if (!youtubeEnabled() || !parsed) throw mediaError('O YouTube precisa do Worker próprio: preencha LINK_PROXY no script (e LINK_PROXY_YOUTUBE = true).', 'YT_NO_WORKER');
+    onStage?.('Consultando título, miniatura e duração...');
+    const key = LINK_PROXY_KEY ? `&key=${encodeURIComponent(LINK_PROXY_KEY)}` : '';
+    const url = `${base}/yt/info?url=${encodeURIComponent(pageUrl)}${LINK_PROXY_YOUTUBE_SIZES ? '&sizes=1' : ''}${key}`;
+    const slow = setTimeout(() => onStage?.('Confirmando as qualidades realmente disponíveis...'), 2200);
+    let response;
+    try { response = await fetch(url, { cache: 'no-store', credentials: 'omit', signal }); }
+    catch (error) {
+      if (signal?.aborted) throw mediaError('Busca cancelada.', 'MEDIA_CANCELLED');
+      throw mediaError('Não consegui falar com o seu Worker (rede ou CORS). Confira LINK_PROXY e se o Worker está publicado.', 'YT_WORKER_UNREACHABLE');
+    } finally { clearTimeout(slow); }
+    let body = null; try { body = await response.json(); } catch {}
+    if (!response.ok || !body?.ok) {
+      if (body?.code === 'NO_ROUTE') throw mediaError('O seu Worker é uma versão antiga, sem suporte ao YouTube. Publique o worker.js atualizado.', 'YT_OLD_WORKER', response.status);
+      const message = `${body?.error || `O Worker respondeu HTTP ${response.status}.`}${body?.hint ? ` ${body.hint}` : ''}`;
+      throw mediaError(message, `YT_${body?.code || `HTTP_${response.status}`}`, response.status);
+    }
+    const origin = new URL(base).origin;
+    const own = raw => { try { const x = new URL(raw, `${base}/`); return x.origin === origin ? x.href : ''; } catch { return ''; } };
+    const title = cleanDisplayText(body.title || '') || 'Vídeo do YouTube';
+    const author = cleanDisplayText(body.author || '');
+    const thumbnail = /^https:\/\/i\d?\.ytimg\.com\//i.test(body.thumbnail || '') ? body.thumbnail : '';
+    const duration = Number(body.duration || 0) > 0 ? Number(body.duration) : 0;
+    const common = { pageUrl, platform: 'youtube', via: 'worker', trusted: true, sourceScope: 'link', detectedAt: Date.now(), postId: String(body.id || parsed.id) };
+    const options = [];
+    for (const o of Array.isArray(body.options) ? body.options : []) {
+      const href = own(o.url); if (!href || !['video', 'audio'].includes(o.type)) continue;
+      const sizeBytes = Number(o.size?.bytes) > 0 ? Number(o.size.bytes) : 0;
+      const shared = { ...common, url: href, title, thumbnail, duration, sizeBytes, sizeKind: sizeBytes ? String(o.size.kind || '') : '', optionId: String(o.id || ''),
+        fileBase: cleanFilenameBase(o.fileBase || title), sourceKey: `${common.postId}:yt:${o.id}` };
+      if (o.type === 'audio') options.push({ ...shared, kind: 'MP3', mediaType: 'audio', type: 'audio/mpeg', qualityLabel: 'MP3', label: 'Áudio separado · MP3', audioTitle: title, audioArtist: author, score: 90 });
+      else options.push({ ...shared, kind: String(o.container || 'mp4').toUpperCase(), type: String(o.mime || 'video/mp4'), width: Number(o.width || 0), height: Number(o.height || 0),
+        codec: String(o.codec || ''), qualityLabel: o.quality ? `${o.quality}p` : `até ${o.requestedQuality}p`, qualityConfirmed: Boolean(o.quality), label: String(o.label || ''), score: 100 + Number(o.quality || 0) });
+    }
+    if (!options.length) throw mediaError('O Worker não devolveu nenhuma qualidade baixável para este vídeo.', 'YT_NO_OPTIONS');
+    return [{ ...common, kind: 'YOUTUBE', mediaType: 'youtube', url: `https://www.youtube.com/watch?v=${parsed.id}#optdowns-yt`, title, author, thumbnail, duration, isShort: body.kind === 'short',
+      options, warnings: (Array.isArray(body.warnings) ? body.warnings : []).slice(0, 4).map(w => cleanDisplayText(String(w), 220)), sourceKey: `${common.postId}:yt` }];
+  }
+
+  // Asks the Worker for confirmed YouTube options: title, thumbnail and qualities.
+  async function resolveYouTubeLink(url, context = {}) {
+    checkMediaAbort(context);
+    const results = document.getElementById('vdd-link-results');
+    let skeleton = null;
+    if (results && !context.noSkeleton) {
+      skeleton = document.createElement('div'); skeleton.className = 'vdd-yt-skel'; skeleton.setAttribute('aria-hidden', 'true');
+      skeleton.innerHTML = '<div class="vdd-yt-skel-thumb"></div><div class="vdd-yt-skel-lines"><i></i><i></i><i></i></div>';
+      results.replaceChildren(skeleton); delete results.dataset.signature;
+    }
+    try { return await workerYouTubeCandidates(url, context.signal, context.onStage); }
+    finally { if (skeleton?.isConnected) skeleton.remove(); }
+  }
+
+  function createYouTubeCard(item, index, sourceScope = 'link') {
+    const card = document.createElement('article');
+    card.className = 'vdd-card vdd-yt'; card.dataset.media = 'video';
+    const title = cleanDisplayText(item.displayTitle || item.title) || 'Vídeo do YouTube';
+    const options = item.options || [];
+    const byId = new Map(options.map(option => [option.sourceKey, option]));
+    const videos = options.filter(option => !option.mediaType), audios = options.filter(option => option.mediaType === 'audio');
+    const mp4 = videos.filter(option => option.kind === 'MP4'), other = videos.filter(option => option.kind !== 'MP4');
+    const first = mp4[0] || videos[0] || audios[0];
+    const live = { ...first, sourceScope };
+    const duration = formatDuration(item.duration);
+    const optionText = option => [option.mediaType === 'audio' ? 'Somente áudio · MP3' : option.label || option.qualityLabel, ytSizeText(option)].filter(Boolean).join(' · ');
+    const group = (label, list) => list.length ? `<optgroup label="${escapeHtml(label)}">${list.map(option => `<option value="${escapeHtml(option.sourceKey)}">${escapeHtml(optionText(option))}</option>`).join('')}</optgroup>` : '';
+    card.innerHTML = `
+      <div class="vdd-card-top">
+        <div class="vdd-thumb">
+          <div class="vdd-thumb-fallback" aria-hidden="true">${VIDEO_SVG}</div>
+          ${duration ? `<span class="vdd-duration">${escapeHtml(duration)}</span>` : ''}
+        </div>
+        <div class="vdd-main">
+          <div class="vdd-name">${escapeHtml(title)}</div>
+          <div class="vdd-source">${siteIcon('https://www.youtube.com/')}<span>youtube.com${item.isShort ? ' · Short' : ''}${item.author ? ` · ${escapeHtml(item.author)}` : ''}</span></div>
+          <div class="vdd-meta-row"></div>
+        </div>
+      </div>
+      <div class="vdd-quality-wrap">
+        <label class="vdd-field-label">Qualidade e formato
+          <select class="vdd-yt-quality" aria-label="Qualidade e formato do YouTube">${group('Vídeo · MP4', mp4)}${group('Vídeo · outros formatos', other)}${group('Somente áudio', audios)}</select>
+        </label>
+        <div class="vdd-quality-note vdd-yt-note"></div>
+      </div>
+      <div class="vdd-actions"><button class="vdd-btn" type="button">Baixar</button></div>
+      <button type="button" class="vdd-cancel" hidden>Cancelar</button>
+      <div class="vdd-progress">
+        <div class="vdd-progress-line"><div class="vdd-progress-bar"></div></div>
+        <div class="vdd-progress-text">Preparando...</div>
+      </div>`;
+    const select = card.querySelector('.vdd-yt-quality'), chips = card.querySelector('.vdd-meta-row'), note = card.querySelector('.vdd-yt-note');
+    const render = () => {
+      const o = live, size = ytSizeText(o);
+      chips.innerHTML = [
+        `<span class="vdd-badge">${escapeHtml(o.kind)}</span>`,
+        o.mediaType !== 'audio' ? `<span class="vdd-badge${parseInt(o.qualityLabel, 10) >= 720 ? ' vdd-chip-hd' : ''}">${escapeHtml(o.qualityLabel)}</span>` : '',
+        o.width && o.height ? `<span class="vdd-meta-chip">${o.width}×${o.height}</span>` : '',
+        o.codec ? `<span class="vdd-meta-chip">${escapeHtml(o.codec.toUpperCase())}</span>` : '',
+        size ? `<span class="vdd-meta-chip">${escapeHtml(size)}</span>` : '',
+        item.isShort ? '<span class="vdd-meta-chip">Short</span>' : '',
+      ].filter(Boolean).join('');
+      const lines = [];
+      lines.push(o.mediaType === 'audio' ? 'MP3 gerado pela sua instância Cobalt a partir do áudio do vídeo.' : o.qualityConfirmed === false ? 'A instância não informou a resolução final: “até” é o teto pedido.' : 'Qualidade confirmada pela sua instância Cobalt.');
+      lines.push(size ? `Tamanho informado pela fonte: ${size}.` : 'Tamanho não informado: o total só aparece se a fonte enviá-lo durante o download.');
+      if (item.warnings?.length) lines.push(`Avisos: ${item.warnings.join(' ')}`);
+      note.textContent = lines.join(' ');
+    };
+    select.value = first.sourceKey; render();
+    select.addEventListener('change', () => {
+      const option = byId.get(select.value); if (!option) return;
+      for (const key of Object.keys(live)) delete live[key];
+      Object.assign(live, option, { sourceScope }); render();
+    });
+    const thumb = card.querySelector('.vdd-thumb'), thumbnail = normalizeThumbUrl(item.thumbnail || '');
+    if (thumbnail) loadThumbInto(thumb, thumbnail, item.pageUrl || '');
+    attachDownloadHandler(card, live, () => live.fileBase || title);
+    new MutationObserver(() => { select.disabled = ['running', 'queued'].includes(card.dataset.dl || ''); }).observe(card, { attributes: true, attributeFilter: ['data-dl'] });
+    return card;
+  }
+
+  // Downloads through your Worker and keeps the real file type (WebM is not labeled MP4).
   async function downloadViaWorker(item, title, options, firstError) {
     const target = item.pageUrl || item.url;
     options.onProgress?.(null, 'O download direto foi recusado. Pedindo ao seu Worker para tentar este link...', { phase: 'retry' });
@@ -3134,6 +3737,10 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Link resolution
+  // Chooses between the direct and Worker paths for a pasted link and explains failures.
+  // ---------------------------------------------------------------------------
   const PROXY_FINAL_CODES = Object.freeze({
     VIDEO_NOT_FOUND: 'O TikTok informa que este vídeo não existe mais ou o link é inválido.',
     VIDEO_UNAVAILABLE: 'O vídeo está indisponível no TikTok (privado, removido ou restrito). Não há arquivo para baixar.',
@@ -3168,16 +3775,25 @@
     return failure;
   }
 
+  function directAudioCandidate(url, pageUrl) {
+    const name = mediaTitleFromUrl(url) || `Áudio de ${sourceHost(url)}`;
+    return { kind: 'MP3', mediaType: 'audio', type: 'audio/mpeg', url, pageUrl, title: name, audioTitle: name, trusted: true, sourceScope: 'link',
+      qualityLabel: 'MP3', label: /\.mp3(?:$|[?#])/i.test(url) ? 'MP3 original · sem recompressão' : 'Áudio · será convertido em MP3', score: 100, detectedAt: Date.now(), fileBase: cleanFilenameBase(name) };
+  }
+
   async function resolvePublicLink(url, visited = new Set(), depth = 0, operation = {}) {
     assertMediaUrl(url);
     if (visited.has(url) || depth > 2 || visited.size >= 8) return [];
     visited.add(url);
     const context = { ...operation, referrer: url, publicOnly: true, sessionLink: operation.sessionLink !== false };
     checkMediaAbort(context);
+    if (youtubeEnabled() && youtubeLink(url)) return resolveYouTubeLink(url, { ...context, sessionLink: false });
     if (publicPlatform(url)) return resolveSocialLink(url, { ...context, sessionLink: false });
+    if (isAudioUrl(url)) return [directAudioCandidate(url, url)];
     const known = await extractKnownPublicSiteCandidates(url).catch(() => []);
     if (known.length) return known;
     const probed = await probeLinkTarget(url, context);
+    if (probed?.audio) return [directAudioCandidate(probed.url, url)];
     if (probed?.page && publicPlatform(probed.url)) return resolveSocialLink(probed.url, { ...context, sessionLink: false });
     if (probed && !probed.page) return [{ kind: probed.kind, type: probed.contentType, url: probed.url,
       title: mediaTitleFromUrl(probed.url) || `Vídeo de ${sourceHost(probed.url)}`, pageUrl: url,
@@ -3240,6 +3856,10 @@
     return [...unique.values()].sort(compareMediaQuality);
   }
 
+  // ---------------------------------------------------------------------------
+  // Response analysis
+  // Describes bad responses (HTML pages, JSON errors) and finds media inside JSON.
+  // ---------------------------------------------------------------------------
   function sanitizeForMessage(value, max = 140) {
     return String(value ?? '').replace(/https?:\/\/[^\s"'<>]+/gi, '[URL]').replace(/\b[A-Za-z0-9_\-+=\/]{28,}\b/g, '[…]')
       .replace(/\s+/g, ' ').trim().slice(0, max);
@@ -3361,6 +3981,10 @@
     return '';
   }
 
+  // ---------------------------------------------------------------------------
+  // HLS diagnostics
+  // Token expiry checks, segment probes and request traces for HLS.
+  // ---------------------------------------------------------------------------
   const HLS_AUTH_PARAM = /^(?:hash|token|sig|signature|expires?|expiry|validto|validfrom|policy|key-pair-id|hdnts|hdl|ipa|ip|auth|exp|st|md5|secure)$/i;
   const authParamNames = url => { try { return [...new URL(url).searchParams.keys()].filter(key => HLS_AUTH_PARAM.test(key)); } catch { return []; } };
 
@@ -3524,6 +4148,10 @@
       Number(b.height || 0) - Number(a.height || 0) || Number(b.width || 0) - Number(a.width || 0) || Number(b.bandwidth || 0) - Number(a.bandwidth || 0) || Number(b.score || 0) - Number(a.score || 0);
   }
 
+  // ---------------------------------------------------------------------------
+  // Link tab
+  // Search box, result panes and the link search flow.
+  // ---------------------------------------------------------------------------
   function syncInputClear(input) {
     const button = input?.parentElement?.querySelector?.('.vdd-input-clear');
     if (button) button.hidden = !input.value;
@@ -3592,14 +4220,14 @@
       const related = outcome.related?.entries?.length ? outcome.related : null;
       if (related) mountLinkListing(related, { related: true }); else teardownLinkListing();
       const candidates = outcome.candidates;
-      APP.linkResults = candidates.sort(compareMediaQuality).map((item, index) => ({ ...item, order: index + 1, preferred: index === 0, sourceScope: 'link' }));
+      APP.linkResults = orderLinkCandidates(candidates);
       const list = document.getElementById('vdd-link-results');
       if (!list.querySelector('[data-prepared="true"]')) delete list.dataset.signature;
       renderLinkResults();
       status.dataset.state = candidates.length ? 'complete' : '';
-      const watermarkNote = candidates.some(item => item.platform) && !candidates.some(item => item.noWatermark === true)
+      const watermarkNote = candidates.some(item => item.platform && !item.mediaType) && !candidates.some(item => item.noWatermark === true)
         ? ' A fonte não publicou uma versão sem marca d’água; se houver marca incorporada ao vídeo, ela permanece no arquivo.' : '';
-      status.textContent = candidates.length ? `${candidates.length} ${candidates.length === 1 ? 'opção' : 'opções'} publicada${candidates.length === 1 ? '' : 's'}. Confira a qualidade e baixe.${watermarkNote}` :
+      status.textContent = candidates.length ? `${describeLinkResults(candidates)} encontrado${candidates.length === 1 ? '' : 's'}. Escolha a qualidade e baixe.${watermarkNote}` :
         `Nenhuma mídia baixável foi encontrada. ${[...new Set(notes)].slice(0, 3).join(' ') || 'O HTML não publicou uma mídia acessível. Abra o post, reproduza o vídeo e use “Nesta página”.'}`;
       if (outcome.singleError && !candidates.length) status.textContent = `${outcome.singleError.message || 'Não foi possível ler o vídeo deste link.'}${related ? ' Veja os outros vídeos em “Vídeos da página”.' : ''}`;
       else if (related && candidates.length) status.textContent += ` Esta página também lista ${related.entries.length} vídeo${related.entries.length === 1 ? '' : 's'} em “Vídeos da página”.`;
@@ -3610,6 +4238,10 @@
     } finally { APP.linkBusy = false; APP.linkController = null; button.disabled = false; cancel.hidden = true; }
   }
 
+  // ---------------------------------------------------------------------------
+  // Page listings
+  // Finds video entries on listing pages (anchors, JSON-LD) and shows them as cards.
+  // ---------------------------------------------------------------------------
   const DISCOVERY = Object.freeze({ minListing: 3, maxEntries: 600, firstBatch: 12, batch: 12, frameChunk: 4,
     anchorChunk: 250, maxAnchors: 8000, cacheTtl: 5 * 60 * 1000, cacheSize: 6, loadMargin: '700px 0px', keepMargin: '2600px 0px' });
   const AD_HOST = /(?:^|[.-])(?:doubleclick|googlesyndication|googleadservices|adservice|adnxs|exoclick|exosrv|trafficjunky|juicyads|popads|popcash|propellerads|adsterra|clickadu|hilltopads|taboola|outbrain|mgid|revcontent|criteo|ads?|adv|banners?)(?:[.-]|$)/i;
@@ -3784,7 +4416,7 @@
   async function resolveLinkOrListing(url, operation = {}) {
     const op = { ...operation, pageCache: true };
     const single = async () => ({ candidates: await resolvePublicLink(url, new Set(), 0, op) });
-    if (publicPlatform(url) || beegVideoId(url)) return single();
+    if (publicPlatform(url) || beegVideoId(url) || (youtubeEnabled() && youtubeLink(url))) return single();
     const context = { ...op, referrer: url, publicOnly: true, sessionLink: true };
     checkMediaAbort(context);
     const cached = listingCacheGet(url);
@@ -3961,6 +4593,10 @@
     pre.textContent = `Rastro do fluxo que passou na verificação dos segmentos:\n${trace}`;
   }
 
+  // ---------------------------------------------------------------------------
+  // Open-page handoff
+  // Opens a page with the panel ready, for players that only work inside their own page.
+  // ---------------------------------------------------------------------------
   const HANDOFF_HASH = 'optdowns-handoff';
   function handoffUrl(pageUrl) {
     try { const url = new URL(pageUrl); if (!url.hash) url.hash = HANDOFF_HASH; return url.href; } catch { return pageUrl; }
@@ -4027,6 +4663,10 @@
     return state;
   }
 
+  // ---------------------------------------------------------------------------
+  // Network requests
+  // Progress reporting, retries and the GM-based request layer for media.
+  // ---------------------------------------------------------------------------
   function reportByteProgress(callback, loaded, total = 0) {
     const measured = total > 0 && loaded <= total;
     callback?.(measured ? loaded / total * 100 : null, `Recebidos ${(loaded / 1048576).toFixed(1)} MB${measured ? ` de ${(total / 1048576).toFixed(1)} MB` : ' · tamanho total não informado'}`,
@@ -4159,7 +4799,7 @@
   function assertMediaUrl(url) {
     if (!isHttp(url) || isPrivateNetworkUrl(url)) throw mediaError('A fonte não publicou uma URL HTTP pública compatível.');
     const restriction = restrictedPlatformNotice(url);
-    if (restriction) throw mediaError(restriction, 'MEDIA_UNSUPPORTED');
+    if (restriction && !(youtubeEnabled() && youtubeLink(url))) throw mediaError(restriction, 'MEDIA_UNSUPPORTED');
     return url;
   }
 
@@ -4170,6 +4810,7 @@
     return 'arquivo/segmento';
   }
 
+  // One GM_xmlhttpRequest call with timeouts, abort handling and classified errors.
   async function mediaRequestOnce(url, options, mode) {
     const { context = {}, maxBytes = HLS_LIMITS.segment, prefix = false, text = false,
       headers = {}, timeout = NET.requestTimeout } = options;
@@ -4396,6 +5037,10 @@
     return normalized;
   }
 
+  // ---------------------------------------------------------------------------
+  // HLS parsing
+  // Parsers for master and media playlists, byte ranges and attribute lists.
+  // ---------------------------------------------------------------------------
   function resolveHlsUri(uri, baseUrl) {
     if (/\{\$/.test(uri)) throw mediaError('Esta playlist usa variáveis HLS que ainda não são compatíveis.', 'MEDIA_UNSUPPORTED');
     return assertMediaUrl(new URL(uri, baseUrl).href);
@@ -4508,6 +5153,10 @@
     return false;
   }
 
+  // ---------------------------------------------------------------------------
+  // Saving files
+  // Creates files and saves them through the manager, with manual fallbacks for iOS.
+  // ---------------------------------------------------------------------------
   function isManualSaveRequired(error) {
     return error?.code === 'VDD_MANUAL_SAVE_REQUIRED' && error.blob instanceof Blob;
   }
@@ -4822,7 +5471,7 @@
         const handle = await window.showSaveFilePicker({
           suggestedName: job.filename,
           types: [{
-            description: 'Arquivo de vídeo',
+            description: mime.startsWith('video/') ? 'Arquivo de vídeo' : mime.startsWith('audio/') ? 'Arquivo de áudio' : mime.startsWith('image/') ? 'Imagem' : 'Arquivo',
             accept: { [mime]: [ext] },
           }],
         });
@@ -4849,6 +5498,10 @@
       (/Mac/i.test(platform) && Number(navigator.maxTouchPoints || 0) > 1);
   }
 
+  // ---------------------------------------------------------------------------
+  // MP4 inspection
+  // ISO BMFF box parsing to validate output and describe codecs.
+  // ---------------------------------------------------------------------------
   function readUint32BE(bytes, offset = 0) {
     return bytes[offset] * 0x1000000 +
       bytes[offset + 1] * 0x10000 +
@@ -5094,6 +5747,10 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Output validation
+  // Recovers altered files and confirms the browser can read them before saving.
+  // ---------------------------------------------------------------------------
   function findMp4Start(bytes) {
     if (!bytes?.byteLength || bytes.byteLength < 12) return -1;
     const limit = Math.min(bytes.byteLength - 4, 1024 * 1024);
@@ -5288,8 +5945,16 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Delivery
+  // The final save step.
+  // ---------------------------------------------------------------------------
+  const OUTPUT = { mode: 'video', kbps: 192 };
+
+  // Saves a Blob through the manager, with browser and manual fallbacks.
   async function saveBlob(blob, filename, onProgress = null, source = {}) {
     if (!blob?.size) throw new Error('O vídeo preparado está vazio');
+    if (OUTPUT.mode === 'mp3') return saveBlobAsMp3(blob, filename, onProgress, source);
 
     const sourceUrl = String(source?.url || '');
     const sourceType = mediaContentType(source?.contentType || blob.type || '');
@@ -5319,11 +5984,13 @@
 
     filename = filenameForFormat(filename, format);
     blob = ensureBlobMime(blob, format.mime);
+    return deliverBlob(blob, filename, onProgress);
+  }
 
+  async function deliverBlob(blob, filename, onProgress = null) {
     if (isAppleMobileBrowser()) {
       throw manualSaveRequired(blob, filename, new Error('Salvamento binário seguro exigido no iPhone'));
     }
-
     try {
       return await saveBlobWithManager(blob, filename, onProgress);
     } catch (managerError) {
@@ -5331,11 +5998,7 @@
       const job = { blob, filename, objectUrl: '', attempts: 0, cleanupTimer: null };
       try {
         triggerManualBlobDownload(job);
-        if (job.objectUrl) {
-          setTimeout(() => {
-            try { URL.revokeObjectURL(job.objectUrl); } catch {}
-          }, 60000);
-        }
+        if (job.objectUrl) setTimeout(() => { try { URL.revokeObjectURL(job.objectUrl); } catch {} }, 60000);
         return 'anchor';
       } catch (anchorError) {
         console.info('[VDD] Fallback por Blob também falhou:', anchorError);
@@ -5353,6 +6016,10 @@
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // Response checks
+  // Guards against saving an HTML page or other non-media response as a video.
+  // ---------------------------------------------------------------------------
   function mediaContentType(value) {
     const type = String(value || '').toLowerCase();
     if (!type) return '';
@@ -5424,6 +6091,10 @@
     return format;
   }
 
+  // ---------------------------------------------------------------------------
+  // Fresh URLs
+  // Finds a newer signed URL or HLS playlist for the same media.
+  // ---------------------------------------------------------------------------
   function latestPerformanceUrls(test) {
     try {
       return performance.getEntriesByType('resource')
@@ -5581,6 +6252,10 @@
     return storedExact || originalUrl;
   }
 
+  // ---------------------------------------------------------------------------
+  // In-page fetching
+  // Fetches inside the page or its main world when cookies or origin matter.
+  // ---------------------------------------------------------------------------
   async function fetchBlobInPage(url, onProgress) {
     const controller = new AbortController();
     let idleTimer = null;
@@ -5732,6 +6407,10 @@
     return out;
   }
 
+  // ---------------------------------------------------------------------------
+  // GM binary requests
+  // Platform cookies and headers, and binary handling for GM_xmlhttpRequest.
+  // ---------------------------------------------------------------------------
   const PLATFORM_HOSTS = [
     { re: /(?:^|\.)(?:tiktok\.com|tiktokcdn\.com|tiktokcdn-us\.com|tiktokv\.com|tiktokv\.us|byteoversea\.com)$/i, referer: 'https://www.tiktok.com/' },
     { re: /(?:^|\.)(?:instagram\.com|cdninstagram\.com|fbcdn\.net)$/i, referer: 'https://www.instagram.com/' },
@@ -6027,6 +6706,10 @@
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // Direct downloads
+  // Range probing, chunked downloads and retries for direct files.
+  // ---------------------------------------------------------------------------
   function parseContentRange(value) {
     const match = String(value || '').match(/bytes\s+(\d+)-(\d+)\/(\d+|\*)/i);
     if (!match) return null;
@@ -6148,6 +6831,7 @@
     return true;
   }
 
+  // Chunked download with Range requests and retries.
   async function downloadDirectByRanges(url, filename, onProgress) {
     const CHUNK = NET.rangeChunkSize;
     onProgress?.(null, 'Tentando modo por blocos...');
@@ -6431,7 +7115,7 @@
     progress(null, freshUrl !== originalUrl ? 'URL renovada. Iniciando...' : 'Usando a sessão da página...');
 
     let nativeRefusal = null;
-    if ((isAppleMobileBrowser() || getGmDownload()) && isHttp(freshUrl)) {
+    if (OUTPUT.mode === 'video' && (isAppleMobileBrowser() || getGmDownload()) && isHttp(freshUrl)) {
       const nativeTarget = await resolveNativeDirectFormat(
         freshUrl,
         opts.typeHint || '',
@@ -6584,6 +7268,10 @@
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
+  // ---------------------------------------------------------------------------
+  // HLS codecs and choices
+  // Describes video and audio codecs and builds labels for the quality and audio choices.
+  // ---------------------------------------------------------------------------
   function looksLikeSelfInitializingFmp4(bytes) {
     if (findMp4Start(bytes) < 0) return false;
     try {
@@ -6712,6 +7400,10 @@
     throw last || mediaError('Nenhuma qualidade pôde ser aberta.');
   }
 
+  // ---------------------------------------------------------------------------
+  // fMP4 builder
+  // Writes MP4 init segments and fragments from HLS tracks.
+  // ---------------------------------------------------------------------------
   function isoBoxes(bytes, start = 0, end = bytes.length) {
     const result = [];
     while (start < end) {
@@ -6871,6 +7563,10 @@
     return joinBytes([init.ftyp, isoBox('moov', [mvhd, ...traks, isoBox('mvex', trexs)])]);
   }
 
+  // ---------------------------------------------------------------------------
+  // MP3 in HLS
+  // Extracts MP3 frames from transport streams and wraps them in fMP4.
+  // ---------------------------------------------------------------------------
   const MP3_BR_V1_L3 = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
   const MP3_BR_V1_L2 = [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384];
   const MP3_BR_V2 = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
@@ -6998,6 +7694,10 @@
     return joinBytes([moof, isoBox('mdat', [payload])]);
   }
 
+  // ---------------------------------------------------------------------------
+  // HLS transmux and segments
+  // mux.js in a Web Worker, AES-128 decryption and segment prefetching.
+  // ---------------------------------------------------------------------------
   async function createHlsTransmuxer(context) {
     const workerSource = `let muxer; self.onmessage = e => { const m = e.data; try {
       if (m.type === 'start') { importScripts('https://unpkg.com/mux.js@6.3.0/dist/mux.js'); }
@@ -7169,6 +7869,10 @@
     return { records: fragmentRecords(data, init, convertedDuration), segment };
   }
 
+  // ---------------------------------------------------------------------------
+  // HLS memory
+  // Remembers master playlists and resources, and recovers a parent playlist.
+  // ---------------------------------------------------------------------------
   function rememberHlsMaster(text, url, referrer = location.href) {
     if (!/^\s*#EXTM3U/.test(text) || !isHttp(url)) return;
     try {
@@ -7217,6 +7921,10 @@
     return null;
   }
 
+  // ---------------------------------------------------------------------------
+  // HLS audio and tracks
+  // Audio choices, stream description and track reconciliation.
+  // ---------------------------------------------------------------------------
   function audioChoiceKey(audio) { return [audio['GROUP-ID'], audio.NAME, audio.LANGUAGE || '', audio.url ? mediaIdentityKey(audio.url) : 'inband'].join('|'); }
   function audioChoiceLabel(audio) {
     return `${audio.NAME || audio.LANGUAGE || 'Áudio'}${audio.LANGUAGE && audio.NAME !== audio.LANGUAGE ? ` · ${audio.LANGUAGE}` : ''}${audio.CHANNELS ? ` · ${audio.CHANNELS} canais` : ''}${audio.DEFAULT === 'YES' ? ' · padrão' : ''}`;
@@ -7354,6 +8062,10 @@
     throw failure || mediaError('A playlist declarou áudio, mas nenhuma faixa forneceu amostras. Tente outra qualidade.', 'MEDIA_AUDIO_MISSING');
   }
 
+  // ---------------------------------------------------------------------------
+  // HLS to MP4
+  // Assembles the final MP4 and runs the HLS download.
+  // ---------------------------------------------------------------------------
   async function assembleHlsMp4(resolved, context) {
     const renditions = [resolved], tracks = [], parts = [];
     let size = 0, sequence = 1;
@@ -7451,6 +8163,10 @@
     } finally { context.keys?.clear(); APP.hlsJob = null; APP.hlsController = null; }
   }
 
+  // ---------------------------------------------------------------------------
+  // Network capture
+  // DASH manifests, text scanning, and hooks for fetch, XHR, performance entries and the DOM.
+  // ---------------------------------------------------------------------------
   function escapeHtml(value) {
     return String(value)
       .replaceAll('&', '&amp;')
@@ -7712,6 +8428,7 @@
     } catch {}
   }
 
+  // Injects a bridge into the page's own JavaScript context to see requests the userscript sandbox cannot.
   function installMainWorldNetworkBridge() {
     const eventName = 'vdd-network-bridge-2-7-4';
     if (APP.mainWorldBridgeInstalled) return;
@@ -7796,6 +8513,7 @@
     }
   }
 
+  // Wraps fetch and XMLHttpRequest to remember media URLs and manifests.
   function installNetworkHooks() {
     if (APP.networkHooksInstalled) return;
     APP.networkHooksInstalled = true;
@@ -7950,10 +8668,13 @@
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // Icons and site logos
+  // Inline icons and site logos from favicon services, cached locally.
+  // ---------------------------------------------------------------------------
   const ICON_PATHS = Object.freeze({
     download: '<path d="M12 4v11"/><path d="m7.5 11 4.5 4.5 4.5-4.5"/><path d="M5 19.5h14"/>',
     refresh: '<path d="M20 12a8 8 0 1 1-2.5-5.8"/><path d="M20 4.5v4.2h-4.2"/>',
-    settings: '<circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.6a7.7 7.7 0 0 1-1.6.9l-.3 1.8h-2.8l-.3-1.8a7.7 7.7 0 0 1-1.6-.9l-1.7.6-1.4-2.4 1.4-1.1a7 7 0 0 1 0-1.9l-1.4-1.1 1.4-2.4 1.7.6a7.7 7.7 0 0 1 1.6-.9l.3-1.8h2.8l.3 1.8a7.7 7.7 0 0 1 1.6.9l1.7-.6 1.4 2.4-1.4 1.1a7 7 0 0 1 0 1.8z"/>',
     close: '<path d="M6 6l12 12"/><path d="M18 6 6 18"/>',
     expand: '<path d="M9 4H6a2 2 0 0 0-2 2v3"/><path d="M15 4h3a2 2 0 0 1 2 2v3"/><path d="M9 20H6a2 2 0 0 1-2-2v-3"/><path d="M15 20h3a2 2 0 0 0 2-2v-3"/>',
     collapse: '<path d="M4 9h3a2 2 0 0 0 2-2V4"/><path d="M20 9h-3a2 2 0 0 1-2-2V4"/><path d="M4 15h3a2 2 0 0 1 2 2v3"/><path d="M20 15h-3a2 2 0 0 0-2 2v3"/>',
@@ -7977,7 +8698,7 @@
   function ic(name, cls = '') { return `<svg${cls ? ` class="${cls}"` : ''} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${ICON_PATHS[name] || ''}</svg>`; }
 
   const USER_SITE_ICONS = Object.freeze({ });
-  const SITE_STYLES = Object.freeze({ 'tiktok.com': { bg: '#1c1c22', fg: '#fff', ch: 'T', ring: '#3cc3c6' }, 'instagram.com': { bg: '#b83a78', fg: '#fff', ch: 'I', ring: '#e0687e' } });
+  const SITE_STYLES = Object.freeze({ 'tiktok.com': { bg: '#1c1c22', fg: '#fff', ch: 'T', ring: '#3cc3c6' }, 'instagram.com': { bg: '#b83a78', fg: '#fff', ch: 'I', ring: '#e0687e' }, 'youtube.com': { bg: '#c4302b', fg: '#fff', ch: 'Y', ring: '#ff7a73' }, 'youtu.be': { bg: '#c4302b', fg: '#fff', ch: 'Y', ring: '#ff7a73' } });
   function siteKey(url) {
     const host = sourceHost(url) || '';
     return host.replace(/^(www|m|vm|vt|mobile)\./i, '').toLowerCase();
@@ -8177,6 +8898,10 @@
     hydrateSiteLogos(root);
   }
 
+  // ---------------------------------------------------------------------------
+  // Thumbnails
+  // Loads thumbnails with the referrer each site expects.
+  // ---------------------------------------------------------------------------
   function runImageSlot(task) {
     return new Promise((resolve, reject) => {
       const run = () => { IMG_NET.active++; task().then(resolve, reject).finally(() => { IMG_NET.active--; const next = IMG_NET.queue.shift(); if (next) next(); }); };
@@ -8255,6 +8980,10 @@
     thumb.classList.remove('has-image'); thumb.dataset.state = ''; delete thumb.dataset.token;
   }
 
+  // ---------------------------------------------------------------------------
+  // Diagnostics
+  // Error log, tips and the diagnostics report.
+  // ---------------------------------------------------------------------------
   const ERRLOG = { items: [], max: 25 };
   function scrubText(text) { return String(text || '').replace(/(https?:\/\/[^\s"'<>?#]+)[?#]\S*/g, '$1?…').slice(0, 320); }
   function recordIssue(error) {
@@ -8301,6 +9030,22 @@
       return { s: 'bad', label: 'Worker', detail: error?.name === 'TimeoutError' ? 'Sem resposta em 9 s.' : 'Não foi possível falar com o Worker (rede ou CORS).', fix: 'Confira a URL em LINK_PROXY e se o Worker está publicado.' };
     }
   }
+  async function youtubeProbe() {
+    if (!youtubeEnabled()) return { s: 'warn', label: 'YouTube', detail: 'Desligado no script (LINK_PROXY vazio ou LINK_PROXY_YOUTUBE = false).', fix: 'Opcional. Ative para baixar vídeos e Shorts pelo seu Worker + Cobalt.' };
+    const started = Date.now();
+    try {
+      const response = await fetch(`${workerBase()}/yt/status${LINK_PROXY_KEY ? `?key=${encodeURIComponent(LINK_PROXY_KEY)}` : ''}`, { cache: 'no-store', credentials: 'omit', signal: AbortSignal.timeout(12000) });
+      let body = null; try { body = await response.json(); } catch {}
+      const ms = Date.now() - started;
+      if (body?.code === 'NO_ROUTE') return { s: 'warn', label: 'YouTube', detail: 'O Worker é antigo e não tem a rota /yt/status.', fix: 'Publique o worker.js atualizado.' };
+      if (body?.code === 'BAD_KEY') return { s: 'warn', label: 'YouTube', detail: 'O Worker exige a chave.', fix: 'Defina LINK_PROXY_KEY com o mesmo valor de SECRET.' };
+      if (!body || typeof body.ok !== 'boolean') return { s: 'warn', label: 'YouTube', detail: `Resposta inesperada (HTTP ${response.status}).`, fix: 'Confira LINK_PROXY.' };
+      if (!body.ok) return { s: 'bad', label: 'YouTube', detail: body.problem || 'Configuração incompleta no Worker.', fix: 'Veja COBALT_API_URL, COBALT_API_KEY e TOKEN_KEY nas variáveis do Worker.' };
+      return { s: 'ok', label: 'YouTube', detail: `Cobalt ${body.cobalt?.version || '?'} respondeu pelo Worker em ${ms} ms${body.configured?.youtubeApiKey ? ' · duração ativa (YouTube Data API)' : ' · sem YOUTUBE_API_KEY: a duração não é exibida'}.` };
+    } catch (error) {
+      return { s: 'bad', label: 'YouTube', detail: error?.name === 'TimeoutError' ? 'Sem resposta em 12 s.' : 'Não foi possível falar com o Worker (rede ou CORS).', fix: 'Confira LINK_PROXY e se o Worker está publicado.' };
+    }
+  }
   async function collectDiagnostics({ withWorker = true } = {}) {
     const checks = [];
     const add = (s, label, detail, fix) => checks.push({ s, label, detail, fix });
@@ -8313,7 +9058,7 @@
     add(getGmDownload() || isAppleMobileBrowser() ? 'ok' : 'warn', 'Salvamento', isAppleMobileBrowser() ? 'Safari/iOS: o arquivo vai para Downloads/Compartilhar.' : (getGmDownload() ? 'GM_download disponível.' : 'Sem GM_download: salvamento via navegador.'));
     const found = new Set([...APP.hlsUrls, ...APP.directUrls]).size;
     add('ok', 'Esta página', `${found} endereço(s) de mídia detectado(s).${found ? '' : ' Inicie a reprodução e toque em atualizar.'}`);
-    if (withWorker) { const w = await workerProbe(); add(w.s, w.label, w.detail, w.fix); }
+    if (withWorker) { const w = await workerProbe(); add(w.s, w.label, w.detail, w.fix); if (youtubeEnabled()) { const y = await youtubeProbe(); add(y.s, y.label, y.detail, y.fix); } }
     const issues = ERRLOG.items.slice().reverse();
     add(issues.length ? 'warn' : 'ok', 'Erros desta sessão', issues.length ? `${issues.length} registrado(s). Veja abaixo as causas e sugestões.` : 'Nenhum erro de download registrado.');
     return { checks, issues };
@@ -8362,9 +9107,14 @@
     catch { const area = document.createElement('textarea'); area.value = text; area.style.cssText = 'position:fixed;opacity:0;font-size:16px'; document.body.appendChild(area); area.select(); let ok = false; try { ok = document.execCommand('copy'); } catch {} area.remove(); toast(ok ? 'Relatório copiado' : 'Não consegui copiar; selecione o texto manualmente.'); }
   }
 
+  // ---------------------------------------------------------------------------
+  // Sources and recents
+  // The supported-source tiles and the recent-links list.
+  // ---------------------------------------------------------------------------
   const SOURCE_TILES = Object.freeze([
     { id: 'tiktok', title: 'TikTok', hint: 'Link público de um vídeo', example: 'https://www.tiktok.com/@usuario/video/…', icon: () => siteIcon('https://www.tiktok.com/', 'big') },
     { id: 'instagram', title: 'Instagram', hint: 'Reels e posts públicos', example: 'https://www.instagram.com/reel/…', icon: () => siteIcon('https://www.instagram.com/', 'big') },
+    { id: 'youtube', title: 'YouTube', hint: 'Vídeos e Shorts · via seu Worker + Cobalt', example: 'https://www.youtube.com/watch?v=… ou /shorts/…', icon: () => siteIcon('https://www.youtube.com/', 'big') },
     { id: 'file', title: 'Arquivo de vídeo', hint: 'Link direto .mp4, .webm, .mov', example: 'https://site.com/video.mp4', icon: () => `<span class="vdd-glyph">${ic('film')}</span>` },
     { id: 'hls', title: 'Playlist HLS', hint: 'Endereço .m3u8 sem DRM', example: 'https://site.com/video/index.m3u8', icon: () => `<span class="vdd-glyph">${ic('stream')}</span>` },
     { id: 'page', title: 'Página com vídeos', hint: 'Lista os vídeos em cards', example: 'https://site.com/categoria/videos', icon: () => `<span class="vdd-glyph">${ic('doc')}</span>` },
@@ -8389,6 +9139,10 @@
     input.value = url; syncInputClear(input); switchTab('link'); handleLinkSearch();
   }
 
+  // ---------------------------------------------------------------------------
+  // Startup
+  // Boot screen, interaction effects and start().
+  // ---------------------------------------------------------------------------
   const BOOT = { done: false };
   function runBootScreen() {
     if (BOOT.done) return; BOOT.done = true;
@@ -8415,15 +9169,17 @@
   }
 
   function installInteractionFx(root) {
+    const reduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     root.addEventListener('pointerdown', event => {
       const target = event.target.closest?.('.vdd-btn, .vdd-link-btn, .vdd-primary, .vdd-tile, .vdd-chip, .vdd-quality-refresh');
-      if (!target || target.disabled || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
-      const rect = target.getBoundingClientRect(), size = Math.max(rect.width, rect.height) * 2;
-      const dot = document.createElement('span'); dot.className = 'vdd-ripple';
+      if (!target || target.disabled || reduced()) return;
+      const rect = target.getBoundingClientRect(), size = Math.min(640, Math.max(rect.width, rect.height) * 2);
+      for (const old of target.querySelectorAll(':scope > .vdd-ripple')) old.remove();
+      const dot = document.createElement('span'); dot.className = 'vdd-ripple'; dot.setAttribute('aria-hidden', 'true');
       dot.style.cssText = `width:${size}px;height:${size}px;left:${event.clientX - rect.left - size / 2}px;top:${event.clientY - rect.top - size / 2}px`;
-      if (getComputedStyle(target).position === 'static') target.style.position = 'relative';
-      target.style.overflow = 'hidden'; target.appendChild(dot);
-      dot.addEventListener('animationend', () => dot.remove(), { once: true });
+      target.appendChild(dot);
+      const drop = () => dot.remove();
+      dot.addEventListener('animationend', drop, { once: true }); setTimeout(drop, 900);
     }, { passive: true });
     document.addEventListener('visibilitychange', () => root.classList.toggle('vdd-paused', document.hidden), { passive: true });
   }
@@ -8452,6 +9208,312 @@
     runHandoff();
   }
 
+  // ---------------------------------------------------------------------------
+  // Audio, photos and MP3
+  // Audio detection, asset downloads, ZIP of photo sets and local MP3 encoding with lamejs.
+  // ---------------------------------------------------------------------------
+  const MP3_BITRATES = Object.freeze([128, 192, 256, 320]);
+  OUTPUT.kbps = (() => { const v = Number(PREFS.get('mp3.kbps', 192)); return MP3_BITRATES.includes(v) ? v : 192; })();
+
+  function sniffAudio(bytes, declared = '') {
+    if (!bytes || bytes.length < 4) return null;
+    const b = bytes, type = mediaContentType(declared);
+    if (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) return { ext: 'mp3', mime: 'audio/mpeg', label: 'MP3', mp3: true };
+    if (b[0] === 0xff && (b[1] & 0xe0) === 0xe0) {
+      const layer = (b[1] >> 1) & 3;
+      if (layer === 1) return { ext: 'mp3', mime: 'audio/mpeg', label: 'MP3', mp3: true };
+      if (layer === 0) return { ext: 'aac', mime: 'audio/aac', label: 'AAC' };
+    }
+    if (findMp4Start(bytes) >= 0) return { ext: 'm4a', mime: 'audio/mp4', label: 'M4A', container: true };
+    if (b[0] === 0x4f && b[1] === 0x67 && b[2] === 0x67 && b[3] === 0x53) return { ext: 'ogg', mime: 'audio/ogg', label: 'OGG' };
+    if (b[0] === 0x66 && b[1] === 0x4c && b[2] === 0x61 && b[3] === 0x43) return { ext: 'flac', mime: 'audio/flac', label: 'FLAC' };
+    if (b.length > 12 && fourCc(b, 0) === 'RIFF' && fourCc(b, 8) === 'WAVE') return { ext: 'wav', mime: 'audio/wav', label: 'WAV' };
+    if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return { ext: 'webm', mime: 'audio/webm', label: 'WEBM', container: true };
+    if (/^audio\//.test(type) && !looksLikeHtmlBytes(bytes)) return { ext: type.split('/')[1].replace(/^x-/, '').replace(/^mpeg$/, 'mp3'), mime: type, label: type.split('/')[1].toUpperCase(), unconfirmed: true };
+    return null;
+  }
+
+  const AUDIO_EXT = /\.(?:mp3|m4a|aac|ogg|oga|opus|wav|flac)(?:$|[?#&])/i;
+  const isAudioUrl = (url, type = '') => /^audio\//i.test(mediaContentType(type)) || AUDIO_EXT.test(String(url || ''));
+
+  function validateAssetBytes(bytes, contentType, kind, status = 200) {
+    if (status >= 300) throw makeHttpError(`Servidor respondeu HTTP ${status}`, status);
+    if (!bytes?.byteLength) throw makeHttpError('O servidor retornou um arquivo vazio', status);
+    if (responseLooksLikeHtml(contentType) || looksLikeHtmlBytes(bytes)) throw makeHttpError(`O servidor devolveu uma página HTML (login, bloqueio ou erro) em vez do arquivo${htmlPageHint(bytes)}`, status || 403);
+    if (kind === 'image') {
+      const mime = sniffImageMime(bytes, contentType);
+      if (!mime || mime === 'image/svg+xml') throw makeHttpError('A fonte não devolveu uma imagem válida', status);
+      return { mime, ext: { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'image/heic': 'heic', 'image/bmp': 'bmp', 'image/x-icon': 'ico' }[mime] || 'img' };
+    }
+    const audio = sniffAudio(bytes, contentType);
+    if (!audio) throw makeHttpError('A fonte não devolveu um arquivo de áudio reconhecido', status);
+    return audio;
+  }
+
+  async function pageFetchBytes(url, { signal, onProgress, credentials = 'omit' } = {}) {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener?.('abort', abort, { once: true });
+    let idle = setTimeout(abort, NET.pageIdleTimeout);
+    try {
+      const response = await fetch(url, { method: 'GET', credentials, cache: 'no-store', redirect: 'follow', referrerPolicy: 'no-referrer', signal: controller.signal });
+      const contentType = response.headers.get('content-type') || '';
+      if (!response.ok) throw makeHttpError(`Servidor respondeu ${response.status}`, response.status);
+      const total = Number(response.headers.get('content-length') || 0);
+      const chunks = []; let received = 0;
+      if (response.body?.getReader) {
+        const reader = response.body.getReader();
+        for (;;) {
+          const { done, value } = await reader.read(); if (done) break;
+          if (!value?.byteLength) continue;
+          chunks.push(value); received += value.byteLength; clearTimeout(idle); idle = setTimeout(abort, NET.pageIdleTimeout);
+          reportByteProgress(onProgress, received, total);
+        }
+      } else { const buffer = new Uint8Array(await response.arrayBuffer()); chunks.push(buffer); received = buffer.byteLength; }
+      const bytes = new Uint8Array(received); let at = 0;
+      for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.byteLength; }
+      return { bytes, contentType, status: response.status };
+    } catch (error) {
+      if (signal?.aborted) throw mediaError('Download cancelado.', 'MEDIA_CANCELLED');
+      if (error?.name === 'AbortError') throw makeHttpError('A fonte ficou sem responder', 0);
+      throw error;
+    } finally { clearTimeout(idle); signal?.removeEventListener?.('abort', abort); }
+  }
+
+  async function gmFetchBytes(url, { signal, onProgress } = {}) {
+    let lastError = null;
+    for (const mode of ['session', 'minimal', 'bare']) {
+      checkMediaAbort({ signal });
+      try {
+        const result = await gmArrayBufferRequest(url, {}, NET.requestTimeout, event => {
+          if (event?.lengthComputable && event.total > 0) reportByteProgress(onProgress, event.loaded, event.total);
+          else if (event?.loaded > 0) reportByteProgress(onProgress, event.loaded);
+        }, 'arraybuffer', mode);
+        if (result.status === 429 || result.status >= 500) throw mediaHttpError(result.status, result.headers);
+        if (result.status === 200 && result.bytes.byteLength) return { bytes: result.bytes, contentType: result.contentType, status: 200 };
+        lastError = makeHttpError(`Servidor respondeu ${result.status}`, result.status);
+        if (![401, 403].includes(result.status)) break;
+      } catch (error) { if (error?.code === 'MEDIA_CANCELLED') throw error; lastError = error; if (error.status === 429) break; }
+    }
+    throw lastError || makeHttpError('A requisição alternativa não pôde ser concluída');
+  }
+
+  async function fetchAssetBytes(url, kind, { signal, onProgress } = {}) {
+    checkMediaAbort({ signal });
+    const base = workerBase(), fromWorker = Boolean(base) && originOf(url) === originOf(base);
+    const order = platformHostInfo(url) && !fromWorker ? ['gm', 'page'] : ['page', 'gm'];
+    let firstError = null;
+    for (const way of order) {
+      try {
+        if (way === 'gm' && !getGmXhr()) continue;
+        const got = way === 'gm' ? await gmFetchBytes(url, { signal, onProgress }) : await pageFetchBytes(url, { signal, onProgress, credentials: (!platformHostInfo(url) && !fromWorker && originOf(url) === location.origin) ? 'include' : 'omit' });
+        const info = validateAssetBytes(got.bytes, got.contentType, kind, got.status);
+        return { bytes: got.bytes, info };
+      } catch (error) {
+        if (error?.code === 'MEDIA_CANCELLED') throw error;
+        firstError ||= error;
+        if (error?.status === 429) break;
+      }
+    }
+    throw firstError || makeHttpError('Não foi possível baixar o arquivo');
+  }
+
+  function assetUrlCandidates(item, partIndex = null) {
+    const list = [item.url, ...(item.alternatives || [])].filter(Boolean);
+    const base = workerBase();
+    if (base && item.platform === 'tiktok' && !item.via && item.pageUrl && /^https:\/\//i.test(item.pageUrl)) {
+      const key = LINK_PROXY_KEY ? `&key=${encodeURIComponent(LINK_PROXY_KEY)}` : '';
+      const part = item.mediaType === 'audio' ? 'audio' : 'image';
+      const idx = part === 'image' ? `&i=${Math.max(0, Number(partIndex ?? (item.imageIndex || 1) - 1))}` : '';
+      list.push(`${base}/dl?url=${encodeURIComponent(item.pageUrl)}&part=${part}${idx}${key}`);
+    }
+    return [...new Set(list)];
+  }
+
+  async function fetchAssetWithFallbacks(item, kind, options, partIndex = null) {
+    let lastError = null;
+    for (const url of assetUrlCandidates(item, partIndex)) {
+      try { return await fetchAssetBytes(url, kind, options); }
+      catch (error) { if (error?.code === 'MEDIA_CANCELLED') throw error; lastError = error; }
+    }
+    throw lastError || makeHttpError('Não foi possível baixar o arquivo');
+  }
+
+  const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  function crc32(bytes) { let c = 0xffffffff; for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
+  // Minimal uncompressed ZIP writer for photo sets.
+  function buildZip(files) {
+    const enc = new TextEncoder(), parts = [], central = [];
+    const d = new Date(), dosTime = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1), dosDate = ((Math.max(1980, d.getFullYear()) - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+    let offset = 0;
+    for (const file of files) {
+      const name = enc.encode(file.name), data = file.data, crc = crc32(data);
+      const local = new DataView(new ArrayBuffer(30));
+      local.setUint32(0, 0x04034b50, true); local.setUint16(4, 20, true); local.setUint16(6, 0x0800, true); local.setUint16(8, 0, true);
+      local.setUint16(10, dosTime, true); local.setUint16(12, dosDate, true); local.setUint32(14, crc, true);
+      local.setUint32(18, data.length, true); local.setUint32(22, data.length, true); local.setUint16(26, name.length, true); local.setUint16(28, 0, true);
+      parts.push(new Uint8Array(local.buffer), name, data);
+      const entry = new DataView(new ArrayBuffer(46));
+      entry.setUint32(0, 0x02014b50, true); entry.setUint16(4, 20, true); entry.setUint16(6, 20, true); entry.setUint16(8, 0x0800, true); entry.setUint16(10, 0, true);
+      entry.setUint16(12, dosTime, true); entry.setUint16(14, dosDate, true); entry.setUint32(16, crc, true);
+      entry.setUint32(20, data.length, true); entry.setUint32(24, data.length, true); entry.setUint16(28, name.length, true);
+      entry.setUint32(42, offset, true);
+      central.push(new Uint8Array(entry.buffer), name);
+      offset += 30 + name.length + data.length;
+    }
+    const centralSize = central.reduce((sum, part) => sum + part.length, 0);
+    const end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true); end.setUint32(12, centralSize, true); end.setUint32(16, offset, true);
+    return new Blob([...parts, ...central, new Uint8Array(end.buffer)], { type: 'application/zip' });
+  }
+
+  function getLame() { return globalThis.lamejs || window.lamejs || (typeof unsafeWindow !== 'undefined' ? unsafeWindow.lamejs : null) || null; }
+
+  function id3v2Tag({ title = '', artist = '' } = {}) {
+    const frame = (id, text) => {
+      if (!text) return new Uint8Array(0);
+      const body = new Uint8Array(1 + 2 + text.length * 2); body[0] = 1; body[1] = 0xff; body[2] = 0xfe;
+      for (let i = 0; i < text.length; i++) { const c = text.charCodeAt(i); body[3 + i * 2] = c & 255; body[4 + i * 2] = c >> 8; }
+      const out = new Uint8Array(10 + body.length); out.set(Array.from(id, ch => ch.charCodeAt(0)), 0);
+      new DataView(out.buffer).setUint32(4, body.length, false); out.set(body, 10); return out;
+    };
+    const frames = [frame('TIT2', String(title).slice(0, 120)), frame('TPE1', String(artist).slice(0, 120))].filter(f => f.length);
+    if (!frames.length) return new Uint8Array(0);
+    const size = frames.reduce((n, f) => n + f.length, 0), head = new Uint8Array(10);
+    head.set([0x49, 0x44, 0x33, 3, 0, 0, (size >> 21) & 127, (size >> 14) & 127, (size >> 7) & 127, size & 127]);
+    const out = new Uint8Array(10 + size); out.set(head); let at = 10; for (const f of frames) { out.set(f, at); at += f.length; }
+    return out;
+  }
+
+  function resampleLinear(data, from, to) {
+    if (from === to) return data;
+    const length = Math.max(1, Math.round(data.length * to / from)), out = new Float32Array(length), ratio = from / to;
+    for (let i = 0; i < length; i++) { const pos = i * ratio, i0 = Math.floor(pos), i1 = Math.min(data.length - 1, i0 + 1), f = pos - i0; out[i] = data[i0] * (1 - f) + data[i1] * f; }
+    return out;
+  }
+
+  async function decodeAudioBlob(blob) {
+    const Ctx = window.AudioContext || window.webkitAudioContext || globalThis.AudioContext || globalThis.webkitAudioContext;
+    if (!Ctx) throw new Error('Este navegador não consegue decodificar áudio para converter em MP3.');
+    const buffer = await blob.arrayBuffer();
+    let ctx; try { ctx = new Ctx({ sampleRate: 44100 }); } catch { ctx = new Ctx(); }
+    try {
+      return await new Promise((resolve, reject) => {
+        const maybe = ctx.decodeAudioData(buffer, resolve, reject);
+        if (maybe && typeof maybe.then === 'function') maybe.then(resolve, reject);
+      });
+    } catch (error) {
+      throw new Error('O navegador não conseguiu ler o áudio deste arquivo (codec sem suporte). Tente baixar o vídeo e converter em outro app.');
+    } finally { try { ctx.close?.(); } catch {} }
+  }
+
+  // Decodes audio in the browser and encodes MP3 with lamejs.
+  async function blobToMp3(blob, { kbps = OUTPUT.kbps, title = '', artist = '', onProgress = null, signal = null } = {}) {
+    const lame = getLame();
+    if (!lame?.Mp3Encoder) throw new Error('O conversor MP3 (lamejs) não carregou. Verifique se o gerenciador de scripts baixou o @require do OPTDOWNS.');
+    if (blob.size > 400 * 1024 * 1024) throw new Error('Arquivo grande demais para converter em MP3 neste navegador. Baixe o vídeo e extraia o áudio em outro app.');
+    onProgress?.(null, 'Lendo o áudio do arquivo...', { phase: 'convert' });
+    await yieldUi(0);
+    const audio = await decodeAudioBlob(blob);
+    const channels = Math.min(2, audio.numberOfChannels || 1);
+    let rate = audio.sampleRate; const rates = [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
+    let left = audio.getChannelData(0), right = channels > 1 ? audio.getChannelData(1) : null;
+    if (!rates.includes(rate)) { left = resampleLinear(left, rate, 44100); right = right && resampleLinear(right, rate, 44100); rate = 44100; }
+    const encoder = new lame.Mp3Encoder(channels, rate, Number(kbps) || 192);
+    const block = 1152 * 16, out = [id3v2Tag({ title, artist })].filter(part => part.length);
+    const toInt16 = (src, from, to) => { const dst = new Int16Array(to - from); for (let i = from; i < to; i++) { const v = Math.max(-1, Math.min(1, src[i])); dst[i - from] = v < 0 ? v * 0x8000 : v * 0x7fff; } return dst; };
+    let lastUi = 0;
+    for (let at = 0; at < left.length; at += block) {
+      checkMediaAbort({ signal });
+      const end = Math.min(left.length, at + block);
+      const chunk = channels > 1 ? encoder.encodeBuffer(toInt16(left, at, end), toInt16(right, at, end)) : encoder.encodeBuffer(toInt16(left, at, end));
+      if (chunk.length) out.push(new Uint8Array(chunk));
+      const now = performance.now();
+      if (now - lastUi > 120) { lastUi = now; onProgress?.(Math.round(end / left.length * 100), `Convertendo em MP3 · ${kbps} kbps`, { phase: 'convert', measured: true }); await yieldUi(0); }
+    }
+    const tail = encoder.flush(); if (tail.length) out.push(new Uint8Array(tail));
+    const mp3 = new Blob(out, { type: 'audio/mpeg' });
+    if (!mp3.size) throw new Error('A conversão para MP3 não produziu áudio (o arquivo pode não ter faixa de áudio).');
+    return mp3;
+  }
+
+  async function saveBlobAsMp3(blob, filename, onProgress, source = {}) {
+    const probe = new Uint8Array(await blob.slice(0, 4096).arrayBuffer());
+    if (looksLikeHtmlBytes(probe)) throw new Error('O conteúdo recebido é uma página HTML, não um arquivo de mídia');
+    const known = sniffAudio(probe, source?.contentType || blob.type);
+    const mp3 = known?.mp3 ? blob : await blobToMp3(blob, { kbps: OUTPUT.kbps, title: OUTPUT.title || '', artist: OUTPUT.artist || '', onProgress, signal: OUTPUT.signal || APP.directController?.signal || APP.hlsController?.signal });
+    onProgress?.(null, 'Salvando o MP3...', { phase: 'save' });
+    return deliverBlob(new Blob([mp3], { type: 'audio/mpeg' }), `${cleanFilenameBase(filename)}.mp3`, onProgress);
+  }
+
+  const padIndex = n => String(n).padStart(2, '0');
+
+  async function downloadAssetItem(item, title, options) {
+    const onProgress = options.onProgress || (() => {}), signal = options.signal, base = cleanFilenameBase(item.fileBase || title);
+    if (item.platform && !item.via && Date.now() - Number(item.detectedAt || 0) > 45000 && item.postId) {
+      onProgress(null, 'Atualizando a URL pública...');
+      try { item = { ...(await refreshPublicItem(item)), fileBase: item.fileBase, images: item.images }; } catch {}
+    }
+    if (item.mediaType === 'zip') {
+      const files = [], images = item.images || [];
+      for (let i = 0; i < images.length; i++) {
+        checkMediaAbort({ signal });
+        const image = images[i];
+        const label = `Baixando foto ${i + 1} de ${images.length}...`;
+        const got = await fetchAssetWithFallbacks({ ...item, mediaType: 'image', url: image.url, alternatives: image.alternatives || [], imageIndex: image.imageIndex || i + 1 }, 'image',
+          { signal, onProgress: (pct, text, detail) => onProgress(Math.round((i + (pct == null ? 0 : pct / 100)) / images.length * 100), `${label} ${text ? '' : ''}`.trim(), { ...detail, measured: true, phase: 'transfer' }) }, (image.imageIndex || i + 1) - 1);
+        files.push({ name: `${item.fileBase ? item.fileBase.replace(/-fotos$/, '') : base}-${padIndex(i + 1)}.${got.info.ext}`, data: got.bytes });
+      }
+      onProgress(null, 'Montando o arquivo ZIP...', { phase: 'save' });
+      await yieldUi(0);
+      const zip = buildZip(files);
+      await deliverBlob(zip, `${base}.zip`, onProgress);
+      onProgress(100, `${files.length} fotos salvas em um ZIP`);
+      toast('ZIP enviado para Downloads');
+      return;
+    }
+    const kind = item.mediaType === 'audio' ? 'audio' : 'image';
+    onProgress(null, kind === 'audio' ? 'Baixando o áudio...' : 'Baixando a imagem na melhor qualidade...');
+    const got = await fetchAssetWithFallbacks(item, kind, { signal, onProgress });
+    if (kind === 'image') {
+      onProgress(null, 'Salvando a imagem...', { phase: 'save' });
+      await deliverBlob(new Blob([got.bytes], { type: got.info.mime }), `${base}.${got.info.ext}`, onProgress);
+      onProgress(100, 'Imagem salva');
+      toast('Imagem enviada para Downloads');
+      return;
+    }
+    let mp3Blob;
+    const raw = new Blob([got.bytes], { type: got.info.mime });
+    if (got.info.mp3) { onProgress(null, 'Áudio já está em MP3 · mantendo a qualidade original', { phase: 'save' }); mp3Blob = raw; }
+    else mp3Blob = await blobToMp3(raw, { kbps: OUTPUT.kbps, title: item.audioTitle || '', artist: item.audioArtist || '', onProgress, signal });
+    onProgress(null, 'Salvando o MP3...', { phase: 'save' });
+    await deliverBlob(new Blob([mp3Blob], { type: 'audio/mpeg' }), `${base}.mp3`, onProgress);
+    onProgress(100, got.info.mp3 ? 'MP3 salvo (qualidade original da fonte)' : `MP3 salvo · ${OUTPUT.kbps} kbps`);
+    toast('MP3 enviado para Downloads');
+  }
+
+  function orderLinkCandidates(list) {
+    const rank = item => item.mediaType === 'zip' ? 0 : !item.mediaType ? 1 : item.mediaType === 'image' ? 2 : 3;
+    const videos = list.filter(item => !item.mediaType).sort(compareMediaQuality);
+    const zips = list.filter(item => item.mediaType === 'zip'), photos = list.filter(item => item.mediaType === 'image').sort((a, b) => Number(a.imageIndex || 0) - Number(b.imageIndex || 0));
+    const audios = list.filter(item => item.mediaType === 'audio'), youtubes = list.filter(item => item.mediaType === 'youtube');
+    return [...youtubes, ...zips, ...videos, ...photos, ...audios].map((item, index) => ({ ...item, order: index + 1, preferred: index === 0 && rank(item) < 2, sourceScope: 'link' }));
+  }
+
+  function describeLinkResults(list) {
+    const videos = list.filter(i => !i.mediaType).length, photos = list.filter(i => i.mediaType === 'image').length, audio = list.filter(i => i.mediaType === 'audio').length;
+    const parts = [], yt = list.filter(i => i.mediaType === 'youtube');
+    if (yt.length) { const n = yt.reduce((sum, i) => sum + (i.options?.length || 0), 0); parts.push(`${yt.length === 1 ? 'vídeo do YouTube' : `${yt.length} vídeos do YouTube`} · ${n} ${n === 1 ? 'opção' : 'opções'} confirmada${n === 1 ? '' : 's'}`); }
+    if (videos) parts.push(`${videos} ${videos === 1 ? 'vídeo' : 'opções de vídeo'}`);
+    if (photos) parts.push(`${photos} ${photos === 1 ? 'foto' : 'fotos'}`);
+    if (audio) parts.push('áudio MP3');
+    return parts.join(' · ') || `${list.length} ${list.length === 1 ? 'opção' : 'opções'}`;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Entry
+  // Network hooks start before the page loads; the UI starts when the DOM is ready.
+  // ---------------------------------------------------------------------------
   installMainWorldNetworkBridge();
   installNetworkHooks();
 
@@ -8461,14 +9523,16 @@
     start();
   }
 
+  // Test hook: does nothing unless a test harness defines it before the script loads.
   if (typeof globalThis.__OPTDOWNS_TEST_HOOK__ === 'function') {
     globalThis.__OPTDOWNS_TEST_HOOK__({ APP, DISCOVERY, LISTING, mediaRequest, mediaTransportModes, isAnonymousContext, wantsSession, isSessionLinkItem,
       classifyVideoAnchor, extractPageVideoEntries, resolveLinkOrListing, resolveListingEntry, mountLinkListing, teardownLinkListing, listingCache,
       resolvePublicLink, inspectHlsChoices, resolveHlsPlaylist, preflightHlsSegments, entryUrlKey, siteKeyOf, linkPageCache, handleLinkSearch,
       renderLinkResults, openListingEntry, downloadHlsAsMp4, createMediaCard, fetchCredentialsFor, hlsTraceOf, handoffUrl, runHandoff, showTraceToggle,
-      downloadPublicItem, canTryLinkWorker, fetchWorkerInfo,
+      downloadPublicItem, canTryLinkWorker, fetchWorkerInfo, youtubeLink, workerYouTubeCandidates, createYouTubeCard, resolveYouTubeLink, youtubeProbe,
       describeCodecs, describeVideoCodec, describeAudioCodec, hlsCodecNote, hlsChoiceLabel, formatFps, describeMp4Moov, formatFileInfo, mergeOutputStats,
       HLS_PREFETCH, hlsPrefetchWindow, scheduleHlsPrefetch, readSegmentBytesPrefetched, DL_QUEUE, dlQueuePush, dlQueueRemove, dlQueueNext, dlQueueRefresh, isoBoxes,
+      publicPlatform, pastedPublicUrl, extractSocialCandidates, buildZip, crc32, sniffAudio, blobToMp3, downloadAssetItem, orderLinkCandidates, OUTPUT, POS, PREFS, workerTikTokCandidates, hdLabel,
       ic, siteIcon, ICON_PATHS, ERRLOG, recordIssue, tipsFor, collectDiagnostics, runDiagnostics, applySafeFixes, setResolutionChips, SOURCE_TILES, switchTab, runBootScreen, rememberLink, readRecents });
   }
 })();

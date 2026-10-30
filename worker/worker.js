@@ -1,21 +1,30 @@
 // OPTDOWNS Worker: optional download proxy for the OPTDOWNS userscript.
-// MIT License. See LICENSE. Setup and routes: worker/README.md
+// MIT License. Setup, variables and routes: worker/README.md
 
+
+// ---------------------------------------------------------------------------
+// Constants
+// Browser user agents, TikTok hosts, and redirect and timeout limits.
+// ---------------------------------------------------------------------------
 const UA_LIST = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
 ];
 const PAGE_HOSTS = /(^|\.)tiktok\.com$/i;
-const MEDIA_HOSTS = /(^|\.)(tiktok\.com|tiktokcdn\.com|tiktokcdn-us\.com|tiktokcdn-eu\.com|tiktokv\.com|tiktokv\.us|tiktokv\.eu|byteoversea\.com|muscdn\.com|ibytedtos\.com)$/i;
+const MEDIA_HOSTS = /(^|\.)(tiktok\.com|tiktokcdn\.com|tiktokcdn-us\.com|tiktokcdn-eu\.com|tiktokv\.com|tiktokv\.us|tiktokv\.eu|byteoversea\.com|muscdn\.com|musical\.ly|ibytedtos\.com|byteimg\.com|ibyteimg\.com)$/i;
 const MAX_REDIRECTS = 5;
 const PAGE_TIMEOUT_MS = 12000;
 const CDN_TIMEOUT_MS = 20000;
 
+// ---------------------------------------------------------------------------
+// Errors and responses
+// CORS headers, ProxyError, and JSON responses that carry the failing stage and a hint.
+// ---------------------------------------------------------------------------
 const CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, HEAD, OPTIONS',
   'access-control-allow-headers': 'range, content-type',
-  'access-control-expose-headers': 'content-disposition, content-length, content-range, accept-ranges, x-optdowns-quality, x-optdowns-stage',
+  'access-control-expose-headers': 'content-disposition, content-length, content-range, accept-ranges, x-optdowns-quality, x-optdowns-stage, x-optdowns-estimated-length, x-optdowns-yt-format',
   'access-control-max-age': '86400',
 };
 
@@ -45,6 +54,10 @@ function errorResponse(err, id) {
   return json(status, body, headers);
 }
 
+// ---------------------------------------------------------------------------
+// Network helpers
+// Timeouts, network error mapping and the per-request cookie jar.
+// ---------------------------------------------------------------------------
 function timeoutSignal(ms) { return AbortSignal.timeout(ms); }
 
 function netError(e, stage, what, site = 'o TikTok') {
@@ -70,6 +83,10 @@ function storeCookies(res, jar) {
 }
 const cookieHeader = jar => [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
 
+// ---------------------------------------------------------------------------
+// TikTok page
+// Fetches the public page the way a browser would.
+// ---------------------------------------------------------------------------
 async function fetchPage(startUrl, jar, ua, id, trace) {
   let current = startUrl;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
@@ -98,6 +115,10 @@ async function fetchPage(startUrl, jar, ua, id, trace) {
   throw new ProxyError(502, 'TOO_MANY_REDIRECTS', 'page', 'Redirecionamentos demais ao abrir o link.');
 }
 
+// ---------------------------------------------------------------------------
+// TikTok post parsing
+// Finds the post in the page JSON and picks the video, photo, audio and cover URLs.
+// ---------------------------------------------------------------------------
 function extractJson(html) {
   for (const re of [
     /<script[^>]*\bid=["']__UNIVERSAL_DATA_FOR_REHYDRATION__["'][^>]*>([\s\S]*?)<\/script>/i,
@@ -133,30 +154,71 @@ function findItem(data, wantedId) {
   return found ? { item: found, statusCode: scope?.statusCode } : { item: null, statusCode: scope?.statusCode };
 }
 
-function pickVideo(html, wantedId) {
+function hdLabel(w, h) {
+  w = Number(w) || 0; h = Number(h) || 0;
+  const side = w && h ? Math.min(w, h) : (w || h);
+  if (!side) return '';
+  return side >= 2160 ? '4K' : side >= 1440 ? '2K' : side >= 1080 ? 'Full HD' : side >= 720 ? 'HD' : 'SD';
+}
+function sortImageUrls(urls) {
+  const score = u => /\.jpe?g(?:$|[?~#&])|image\.jpeg/i.test(u) ? 3 : /\.png(?:$|[?~#&])/i.test(u) ? 2.5 : /\.webp(?:$|[?~#&])|image\.webp/i.test(u) ? 2 : /\.(?:heic|avif)(?:$|[?~#&])/i.test(u) ? 1 : 1.5;
+  return urls.map((u, i) => [u, i]).sort((x, y) => score(y[0]) - score(x[0]) || x[1] - y[1]).map(x => x[0]);
+}
+const httpsList = x => [...new Set(urlList(x).map(u => String(u).replace(/^http:\/\//i, 'https://')).filter(u => /^https:\/\//i.test(u)))];
+
+function pickPost(html, wantedId) {
   const parsed = extractJson(html);
   if (!parsed) return { error: 'NO_DATA_SCRIPT', markers: pageMarkers(html) };
   const { item, statusCode } = findItem(parsed.data, wantedId);
   if (!item) return { error: Number(statusCode) ? 'ITEM_UNAVAILABLE' : 'NO_ITEM', statusCode, markers: pageMarkers(html), source: parsed.source };
-  if (item.imagePost && !item.video?.playAddr && !item.video?.bitrateInfo?.length) return { error: 'IMAGE_POST', source: parsed.source };
-  const v = item.video || {}, cands = [];
-  const add = (list, q, kind) => { for (const raw of urlList(list)) { const u = String(raw).replace(/^http:\/\//i, 'https://'); if (/^https:\/\//i.test(u)) cands.push({ url: u, q: Number(q) || 0, kind }); } };
+  const v = item.video || {}, cands = [], options = [];
+  const add = (list, q, kind) => { for (const u of httpsList(list)) cands.push({ url: u, q: Number(q) || 0, kind }); };
+  const addOption = (addrObj, bitrate, codec, width, height) => {
+    const urls = httpsList(addrObj); if (!urls.length) return;
+    options.push({ urls, bitrate: Number(bitrate) || 0, codec: String(codec || '').toLowerCase(), width: Number(width) || 0, height: Number(height) || 0 });
+  };
   for (const r of (v.bitrateInfo || v.bit_rate || []).slice().sort((a, b) => (Number(b.Bitrate || b.bit_rate) || 0) - (Number(a.Bitrate || a.bit_rate) || 0))) {
-    if (/bytevc2|h266|vvc/i.test(String(r.CodecType || r.codec_type || ''))) continue;
-    add(r.PlayAddr || r.play_addr, r.Height || v.height, 'bitrate');
+    const codec = String(r.CodecType || r.codec_type || '');
+    if (/bytevc2|h266|vvc/i.test(codec)) continue;
+    const addr = r.PlayAddr || r.play_addr;
+    add(addr, addr?.Height || r.Height || v.height, 'bitrate');
+    addOption(addr, r.Bitrate || r.bit_rate, codec, addr?.Width || r.Width || v.width, addr?.Height || r.Height || v.height);
   }
   add(v.downloadAddr || v.download_addr, v.height, 'download');
   add(v.playAddr || v.play_addr, v.height, 'play');
+  if (!options.length) {
+    addOption(v.downloadAddr || v.download_addr || v.playAddr || v.play_addr, v.bitrate, '', v.width, v.height);
+  }
+  for (const o of options) o.label = hdLabel(o.width, o.height);
   const seenUrl = new Set(), unique = cands.filter(c => !seenUrl.has(c.url) && seenUrl.add(c.url));
-  if (!unique.length) return { error: 'NO_MEDIA_URLS', source: parsed.source, itemKeys: Object.keys(v).slice(0, 20) };
-  return { id: String(item.id || item.aweme_id || wantedId || 'video'), candidates: unique, source: parsed.source };
+
+  const images = (item.imagePost?.images || item.image_post_info?.images || []).map(img => ({
+    urls: sortImageUrls(httpsList(img.imageURL || img.image_url || img.display_image || img.imageUrl)),
+    width: Number(img.imageWidth || img.width) || 0, height: Number(img.imageHeight || img.height) || 0,
+  })).filter(img => img.urls.length);
+  const m = item.music || {};
+  const musicUrls = httpsList(m.playUrl || m.play_url || m.playAddr);
+  const music = musicUrls.length ? { urls: musicUrls, title: String(m.title || ''), author: String(m.authorName || m.author || ''), duration: Number(m.duration) || 0, original: !!m.original } : null;
+  const coverUrls = httpsList(v.originCover || v.cover || item.imagePost?.cover?.imageURL || item.imagePost?.shareCover?.imageURL || images[0]?.urls);
+  const id = String(item.id || item.aweme_id || wantedId || 'video');
+  const base = { id, type: images.length ? 'photo' : 'video', title: String(item.desc || item.imagePost?.title || ''), author: String(item.author?.uniqueId || item.author?.nickname || (typeof item.author === 'string' ? item.author : '')),
+    duration: Number(v.duration) || 0, candidates: unique, options, images, music, coverUrls, source: parsed.source };
+  if (!unique.length && !images.length && !music) {
+    return item.imagePost ? { error: 'IMAGE_POST', source: parsed.source } : { error: 'NO_MEDIA_URLS', source: parsed.source, itemKeys: Object.keys(v).slice(0, 20) };
+  }
+  return base;
 }
+const pickVideo = pickPost;
 
 function pageMarkers(html) {
   return { bytes: html.length, captcha: /captcha|verify|are you human|security check/i.test(html), login: /\/login|log in to tiktok/i.test(html.slice(0, 20000)),
     hasRehydration: html.includes('__UNIVERSAL_DATA_FOR_REHYDRATION__'), hasSigi: html.includes('SIGI_STATE') };
 }
 
+// ---------------------------------------------------------------------------
+// TikTok CDN
+// Streams media from the CDN with Range support and a cap on subrequests.
+// ---------------------------------------------------------------------------
 async function fetchMedia(startUrl, jar, ua, rangeHeader, method, profile = 0) {
   let current = startUrl;
   for (let hop = 0; hop <= 3; hop++) {
@@ -197,9 +259,10 @@ async function downloadFromCdn(video, jar, ua, req, id, trace, debug) {
       if (good) {
         const out = new Headers(CORS);
         for (const h of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) if (res.headers.get(h)) out.set(h, res.headers.get(h));
-        if (!/^video\/|octet-stream/i.test(out.get('content-type') || '')) out.set('content-type', 'video/mp4');
+        const want = video.asset || { re: /^video\/|octet-stream/i, fallback: 'video/mp4', name: () => `tiktok-${video.id.replace(/[^\w-]/g, '')}.mp4` };
+        if (!want.re.test(out.get('content-type') || '')) out.set('content-type', want.fallback);
         if (!out.has('accept-ranges')) out.set('accept-ranges', 'bytes');
-        out.set('content-disposition', `attachment; filename="tiktok-${video.id.replace(/[^\w-]/g, '')}.mp4"`);
+        out.set('content-disposition', `attachment; filename="${want.name(out.get('content-type') || '')}"`);
         out.set('x-optdowns-quality', String(cand.q || 0)); out.set('x-optdowns-stage', 'cdn');
         out.set('cache-control', 'no-store');
         return { response: new Response(method === 'HEAD' ? null : res.body, { status: res.status, headers: out }), attempts };
@@ -219,6 +282,10 @@ async function downloadFromCdn(video, jar, ua, req, id, trace, debug) {
     { upstreamStatus: last || null, details: { attempts }, hint: status === 403 ? 'URL assinada recusada para este IP; tente novamente (a URL é renovada a cada chamada) ou use outro caminho.' : undefined });
 }
 
+// ---------------------------------------------------------------------------
+// Generic mode
+// Size limits, configuration, the host allow-list and public-host checks.
+// ---------------------------------------------------------------------------
 const PAGE_MAX_BYTES = 2 * 1024 * 1024;
 const PLAYLIST_MAX_BYTES = 1024 * 1024;
 const PLAYLIST_MAX_URIS = 4000;
@@ -242,6 +309,8 @@ function configOf(env) {
     maxBytes: clamp(Number(env.MAX_BYTES) || DEFAULT_MAX_BYTES, 1024 * 1024, 4 * 1024 * 1024 * 1024),
     rateResolve: clamp(Number(env.RATE_RESOLVE_PER_MIN) || 30, 1, 600),
     rateMedia: clamp(Number(env.RATE_MEDIA_PER_MIN) || 1500, 10, 20000),
+    cobaltUrl: /^https?:\/\//i.test(String(env.COBALT_API_URL || '').trim()) ? String(env.COBALT_API_URL).trim() : '', cobaltKey: String(env.COBALT_API_KEY || ''),
+    ytApiKey: String(env.YOUTUBE_API_KEY || ''), ytQualities: String(env.YT_QUALITIES || ''),
   };
 }
 const hostAllowed = (cfg, host) => cfg.any || cfg.hosts.some(d => host === d || host.endsWith('.' + d));
@@ -283,6 +352,10 @@ class Jar {
   entries() { const out = []; let size = 0; for (const x of this.e.values()) { size += x[0].length + x[1].length + x[2].length + 8; if (out.length >= 16 || x[1].length > 600 || size > 2400) continue; out.push(x); } return out; }
 }
 
+// ---------------------------------------------------------------------------
+// Tokens and rate limits
+// AES-GCM tokens that seal media URLs, and best-effort per-IP rate limiting.
+// ---------------------------------------------------------------------------
 const KEY_CACHE = new Map();
 const b64u = bytes => { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
 const unb64u = str => { const s = atob(String(str).replace(/-/g, '+').replace(/_/g, '/')); const out = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i); return out; };
@@ -312,7 +385,7 @@ async function unseal(cfg, token, kinds) {
     throw new ProxyError(403, 'BAD_TOKEN', 'auth', 'Token inválido ou adulterado. Peça /info de novo.');
   }
   if (!data || Number(data.e) < Date.now() / 1000) throw new ProxyError(410, 'TOKEN_EXPIRED', 'auth', 'O token expirou. Peça /info de novo.');
-  if (!kinds.includes(data.k) || !safeUrl(data.u)) throw new ProxyError(403, 'BAD_TOKEN', 'auth', 'Token inválido para esta rota.');
+  if (!kinds.includes(data.k) || (data.k !== 'yt' && !safeUrl(data.u))) throw new ProxyError(403, 'BAD_TOKEN', 'auth', 'Token inválido para esta rota.');
   return data;
 }
 
@@ -326,6 +399,10 @@ function rateCheck(bucket, req, limit) {
   if (e.n > limit) throw new ProxyError(429, 'RATE_LIMIT', 'validate', 'Muitas requisições deste IP. Aguarde um minuto.', { retryAfter: 30 });
 }
 
+// ---------------------------------------------------------------------------
+// Upstream fetching
+// Validated fetches with redirect checks, capped reads and stream limits.
+// ---------------------------------------------------------------------------
 async function upstreamFetch(startUrl, o) {
   let current = startUrl;
   for (let hop = 0; hop <= GENERIC_MAX_REDIRECTS; hop++) {
@@ -369,6 +446,10 @@ function limitStream(body, max) {
   return body.pipeThrough(new TransformStream({ transform(chunk, ctl) { n += chunk.byteLength; if (n > max) { ctl.error(new Error('size-limit')); return; } ctl.enqueue(chunk); } }));
 }
 
+// ---------------------------------------------------------------------------
+// Candidate extraction
+// Extractors that turn page HTML into media candidates.
+// ---------------------------------------------------------------------------
 const unesc = s => String(s).replace(/\\u0026/gi, '&').replace(/\\u002f/gi, '/').replace(/\\\//g, '/').replace(/&amp;/gi, '&').replace(/&#x2f;/gi, '/').replace(/&#38;/g, '&');
 function attrsOf(tag) { const out = {}; for (const m of tag.matchAll(/([a-zA-Z:_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) out[m[1].toLowerCase()] = m[2] ?? m[3] ?? ''; return out; }
 function kindOfUrl(url, type = '') {
@@ -475,6 +556,10 @@ async function resolveGeneric(cfg, target, id, trace) {
 const slugId = p => (String(p).split('/').filter(Boolean).pop() || 'video').replace(/\.[a-z0-9]+$/i, '').replace(/[^\w-]+/g, '').slice(0, 40) || 'video';
 const titleFromPath = p => decodeURIComponent(String(p).split('/').filter(Boolean).pop() || '').replace(/\.[a-z0-9]+$/i, '').slice(0, 120);
 
+// ---------------------------------------------------------------------------
+// Streaming and HLS
+// Streams media and rewrites HLS playlists so segments pass through the Worker.
+// ---------------------------------------------------------------------------
 const BAD_MEDIA_TYPE = /text\/html|application\/(json|xhtml|xml)|text\/xml/i;
 async function streamUpstream(cfg, p, req, id, kind) {
   const jar = new Jar(p.j || []), method = req.method === 'HEAD' ? 'HEAD' : 'GET';
@@ -553,6 +638,10 @@ async function playlistRoute(cfg, req, u, id) {
   return new Response(req.method === 'HEAD' ? null : body, { status: 200, headers: { ...CORS, 'content-type': 'application/vnd.apple.mpegurl; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-optdowns-stage': 'cdn' } });
 }
 
+// ---------------------------------------------------------------------------
+// Generic routes
+// /info and /dl for allowed sites, and the diagnostics page.
+// ---------------------------------------------------------------------------
 async function probeCandidates(cfg, resolved, id) {
   const out = [], probeOne = async (role, url) => {
     try {
@@ -614,43 +703,346 @@ function diagnosticPage(req) {
   } });
 }
 
-async function handleTiktok(req, target, id, trace, debug) {
+// ---------------------------------------------------------------------------
+// TikTok routes
+// /tt and /dl for TikTok posts: video options, photos, audio and cover.
+// ---------------------------------------------------------------------------
+const POST_CACHE = new Map();
+const cacheKey = target => { const m = target.pathname.match(/\/(?:video|photo)\/(\d+)/); return m ? m[1] : ''; };
+function cacheGet(key) { const e = key && POST_CACHE.get(key); if (!e) return null; if (Date.now() - e.t > 90000) { POST_CACHE.delete(key); return null; } return e; }
+function cachePut(key, value) { if (!key) return; POST_CACHE.set(key, { t: Date.now(), ...value }); while (POST_CACHE.size > 24) POST_CACHE.delete(POST_CACHE.keys().next().value); }
+
+const extOfType = (type, fallback) => /jpe?g/i.test(type) ? 'jpg' : /png/i.test(type) ? 'png' : /webp/i.test(type) ? 'webp' : /gif/i.test(type) ? 'gif' : /mpeg|mp3/i.test(type) ? 'mp3' : /mp4|m4a|aac/i.test(type) ? 'm4a' : /ogg/i.test(type) ? 'ogg' : fallback;
+
+function selectPart(picked, q) {
+  const part = q.part || 'video', safeId = picked.id.replace(/[^\w-]/g, '');
+  if (part === 'image') {
+    const i = Number.parseInt(q.i, 10);
+    const img = picked.images[Number.isInteger(i) && i >= 0 ? i : -1];
+    if (!img) throw new ProxyError(404, 'NO_SUCH_IMAGE', 'parse', picked.images.length ? `Foto inexistente (esta publicação tem ${picked.images.length}).` : 'Esta publicação não tem fotos.', { details: { images: picked.images.length } });
+    return { id: picked.id, candidates: img.urls.map(url => ({ url, q: 0, kind: 'image' })), asset: { re: /^image\//i, fallback: 'image/jpeg', name: t => `tiktok-${safeId}-${String(i + 1).padStart(2, '0')}.${extOfType(t, 'jpg')}` } };
+  }
+  if (part === 'audio') {
+    if (!picked.music) throw new ProxyError(404, 'NO_AUDIO', 'parse', 'Este post não publica um arquivo de áudio.');
+    return { id: picked.id, candidates: picked.music.urls.map(url => ({ url, q: 0, kind: 'audio' })), asset: { re: /^audio\/|octet-stream/i, fallback: 'audio/mpeg', name: t => `tiktok-${safeId}-audio.${extOfType(t, 'mp3')}` } };
+  }
+  if (part === 'cover') {
+    if (!picked.coverUrls.length) throw new ProxyError(404, 'NO_COVER', 'parse', 'Este post não publica capa.');
+    return { id: picked.id, candidates: sortImageUrls(picked.coverUrls).map(url => ({ url, q: 0, kind: 'cover' })), asset: { re: /^image\//i, fallback: 'image/jpeg', name: t => `tiktok-${safeId}-capa.${extOfType(t, 'jpg')}` } };
+  }
+  if (!picked.candidates.length) throw new ProxyError(422, 'UNSUPPORTED_POST', 'parse', picked.images.length ? 'O link é uma publicação de fotos: use part=image (veja /tt).' : 'O post não traz URLs de vídeo.');
+  let first = null;
+  if (q.n != null && q.n !== '') first = picked.options[Number.parseInt(q.n, 10)] || null;
+  else if (q.q === 'sd') first = picked.options.length ? picked.options[picked.options.length - 1] : null;
+  const preferred = first ? first.urls.map(url => ({ url, q: first.height || 0, kind: 'option' })) : [];
+  const seen = new Set(preferred.map(c => c.url));
+  return { id: picked.id, candidates: [...preferred, ...picked.candidates.filter(c => !seen.has(c.url))] };
+}
+
+function postInfo(picked, origin, canonical, key) {
+  const dl = extra => `${origin}/dl?url=${encodeURIComponent(canonical)}${key ? `&key=${encodeURIComponent(key)}` : ''}&${extra}`;
+  return {
+    ok: true, adapter: 'tiktok', type: picked.type, id: picked.id, title: picked.title, author: picked.author, duration: picked.duration,
+    cover: picked.coverUrls.length ? dl('part=cover') : '',
+    videos: picked.options.map((o, n) => ({ n, label: o.label || (n === 0 ? 'HD' : ''), width: o.width, height: o.height, bitrate: o.bitrate, codec: o.codec, url: dl(`part=video&n=${n}`) })),
+    images: picked.images.map((img, i) => ({ index: i, width: img.width, height: img.height, url: dl(`part=image&i=${i}`) })),
+    audio: picked.music ? { title: picked.music.title, author: picked.music.author, duration: picked.music.duration, original: picked.music.original, url: dl('part=audio') } : null,
+  };
+}
+
+async function handleTiktok(req, target, id, trace, debug, q = {}, origin = '', info = false) {
   const PAGE_RETRY = ['ORIGIN_BLOCKED', 'NO_PAGE_DATA', 'ORIGIN_CHALLENGE', 'ORIGIN_ERROR', 'ORIGIN_TIMEOUT', 'ORIGIN_UNREACHABLE'];
   const CDN_RETRY = ['CDN_REFUSED', 'CDN_FAILED', 'CDN_TIMEOUT'];
+  const key = cacheKey(target);
   let lastErr = null;
   for (let i = 0; i < UA_LIST.length; i++) {
-    const ua = UA_LIST[i], jar = new Map();
+    let ua = UA_LIST[i], jar = new Map(), page = null, picked = null, fromCache = false;
+    const hit = i === 0 ? cacheGet(key) : null;
+    if (hit) { ua = hit.ua; jar = new Map(hit.jar); picked = hit.picked; page = { url: hit.url }; fromCache = true; trace.push({ stage: 'cache', hit: true }); }
     try {
-      const page = await fetchPage(target.href, jar, ua, id, trace);
-      const wantedId = page.url.match(/\/(?:video|photo)\/(\d+)/)?.[1] || target.pathname.match(/\/(?:video)\/(\d+)/)?.[1] || '';
-      const picked = pickVideo(page.html, wantedId);
-      const pageInfo = { finalHost: hostOf(page.url), hasVideoId: !!wantedId, ...(picked.markers || {}), source: picked.source };
-      trace.push({ stage: 'parse', ...pageInfo, result: picked.error || 'ok', statusCode: picked.statusCode, candidates: picked.candidates?.length });
-      log(id, 'parse', { result: picked.error || 'ok', candidates: picked.candidates?.length || 0 });
-      if (picked.error) {
-        const map = {
-          ITEM_UNAVAILABLE: [404, 'VIDEO_UNAVAILABLE', 'O vídeo está indisponível (privado, removido ou restrito).'],
-          IMAGE_POST: [422, 'UNSUPPORTED_POST', 'O link é uma publicação de fotos, não um vídeo.'],
-          NO_MEDIA_URLS: [502, 'NO_MEDIA_URLS', 'A página não trouxe URLs de vídeo (estrutura do TikTok mudou?).'],
-          NO_DATA_SCRIPT: [502, picked.markers?.captcha ? 'ORIGIN_CHALLENGE' : 'NO_PAGE_DATA', picked.markers?.captcha ? 'O TikTok devolveu uma verificação (captcha) em vez do vídeo.' : 'A página não contém os dados do vídeo (bloqueio ou estrutura nova).'],
-          NO_ITEM: [502, 'NO_PAGE_DATA', 'Os dados da página não contêm este vídeo.'],
-        }[picked.error];
-        throw new ProxyError(map[0], map[1], 'parse', map[2], { details: { statusCode: picked.statusCode, ...(picked.markers || {}), itemKeys: picked.itemKeys } });
+      if (!picked) {
+        page = await fetchPage(target.href, jar, ua, id, trace);
+        const wantedId = page.url.match(/\/(?:video|photo)\/(\d+)/)?.[1] || target.pathname.match(/\/(?:video|photo)\/(\d+)/)?.[1] || '';
+        picked = pickPost(page.html, wantedId);
+        const pageInfo = { finalHost: hostOf(page.url), hasVideoId: !!wantedId, ...(picked.markers || {}), source: picked.source };
+        trace.push({ stage: 'parse', ...pageInfo, result: picked.error || 'ok', statusCode: picked.statusCode, candidates: picked.candidates?.length, images: picked.images?.length });
+        log(id, 'parse', { result: picked.error || 'ok', candidates: picked.candidates?.length || 0, images: picked.images?.length || 0 });
+        if (picked.error) {
+          const map = {
+            ITEM_UNAVAILABLE: [404, 'VIDEO_UNAVAILABLE', 'O vídeo está indisponível (privado, removido ou restrito).'],
+            IMAGE_POST: [422, 'UNSUPPORTED_POST', 'O link é uma publicação de fotos, mas o TikTok não publicou as URLs das imagens.'],
+            NO_MEDIA_URLS: [502, 'NO_MEDIA_URLS', 'A página não trouxe URLs de mídia (estrutura do TikTok mudou?).'],
+            NO_DATA_SCRIPT: [502, picked.markers?.captcha ? 'ORIGIN_CHALLENGE' : 'NO_PAGE_DATA', picked.markers?.captcha ? 'O TikTok devolveu uma verificação (captcha) em vez do post.' : 'A página não contém os dados do post (bloqueio ou estrutura nova).'],
+            NO_ITEM: [502, 'NO_PAGE_DATA', 'Os dados da página não contêm este post.'],
+          }[picked.error];
+          throw new ProxyError(map[0], map[1], 'parse', map[2], { details: { statusCode: picked.statusCode, ...(picked.markers || {}), itemKeys: picked.itemKeys } });
+        }
+        cachePut(key, { ua, jar: [...jar], picked, url: page.url });
       }
-      const out = await downloadFromCdn(picked, jar, ua, req, id, trace, debug);
+      if (info) return json(200, postInfo(picked, origin, page.url.split(/[?#]/)[0], q.key || ''));
+      const sel = selectPart(picked, q);
+      const out = await downloadFromCdn(sel, jar, ua, req, id, trace, debug);
       if (debug) { try { await out.response.body?.cancel(); } catch {} }
-      if (debug) return json(200, { ok: true, requestId: id, adapter: 'tiktok', uaIndex: i, candidates: picked.candidates.map(c => ({ host: hostOf(c.url), q: c.q, kind: c.kind })), trace, cdn: out.attempts, page: pageInfo, note: 'Sem cookies/URLs assinadas por segurança.' });
+      if (debug) return json(200, { ok: true, requestId: id, adapter: 'tiktok', uaIndex: i, cached: fromCache, part: q.part || 'video', type: picked.type, candidates: sel.candidates.map(c => ({ host: hostOf(c.url), q: c.q, kind: c.kind })), images: picked.images.length, audio: !!picked.music, trace, cdn: out.attempts, note: 'Sem cookies/URLs assinadas por segurança.' });
       return out.response;
     } catch (e) {
       const err = e instanceof ProxyError ? e : netError(e, 'internal', 'Erro interno');
       lastErr = err;
       trace.push({ stage: 'retry', uaIndex: i, code: err.code, status: err.status });
+      if (fromCache && key) POST_CACHE.delete(key);
+      if (fromCache && (CDN_RETRY.includes(err.code) || err.code === 'CDN_NOT_FOUND')) { i--; continue; }
       if (!(PAGE_RETRY.includes(err.code) || CDN_RETRY.includes(err.code))) throw err;
     }
   }
   throw lastErr;
 }
 
+// ---------------------------------------------------------------------------
+// YouTube
+// Options and downloads through your own Cobalt instance. No public instance is built in.
+// ---------------------------------------------------------------------------
+const COBALT_TIMEOUT_MS = 25000;
+const YT_INFO_TTL_MS = 60000, YT_TUNNEL_TTL_MS = 45000;
+const YT_DEFAULT_TIERS = '2160:vp9,1440:vp9,1080,720,480,360';
+const YT_HOST = /^(?:www\.|m\.)?(?:youtube\.com|youtube-nocookie\.com)$/i;
+const YT_ANY_HOST = /(^|\.)(youtube\.com|youtu\.be|youtube-nocookie\.com|googlevideo\.com|ytimg\.com)$/i;
+const MIME_BY_EXT = { mp4: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska', mp3: 'audio/mpeg', m4a: 'audio/mp4', opus: 'audio/ogg', ogg: 'audio/ogg' };
+
+function parseYouTube(raw) {
+  let u; try { u = new URL(raw); } catch { return null; }
+  if (u.protocol !== 'https:') return null;
+  const host = u.hostname.toLowerCase(); let id = '', kind = 'video';
+  if (host === 'youtu.be') id = u.pathname.split('/')[1] || '';
+  else if (YT_HOST.test(host)) {
+    const m = u.pathname.match(/^\/(shorts|embed|live|v)\/([\w-]{11})(?:\/|$)/);
+    if (m) { id = m[2]; if (m[1] === 'shorts') kind = 'short'; }
+    else if (u.pathname === '/watch') id = u.searchParams.get('v') || '';
+  } else return null;
+  return /^[\w-]{11}$/.test(id) ? { id, kind, canonical: `https://www.youtube.com/watch?v=${id}` } : null;
+}
+function isoDuration(s) {
+  const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(String(s || ''));
+  if (!m) return null;
+  const sec = (+m[1] || 0) * 86400 + (+m[2] || 0) * 3600 + (+m[3] || 0) * 60 + (+m[4] || 0);
+  return sec > 0 ? sec : null;
+}
+function ytTiers(cfg) {
+  const out = [];
+  for (const part of String(cfg.ytQualities || YT_DEFAULT_TIERS).split(/[\s,;]+/)) {
+    const m = /^(\d{3,4})(?::(h264|vp9|av1))?$/i.exec(part); if (m) out.push({ q: m[1], codec: (m[2] || 'h264').toLowerCase() });
+  }
+  return out.slice(0, 8);
+}
+const cobaltHost = cfg => { try { return new URL(cfg.cobaltUrl).hostname; } catch { return ''; } };
+function needCobalt(cfg) {
+  if (!cfg.cobaltUrl) throw new ProxyError(503, 'YT_NOT_CONFIGURED', 'validate', 'O suporte ao YouTube precisa de uma instância Cobalt própria (variável COBALT_API_URL).', { hint: 'Veja as instruções do worker: defina COBALT_API_URL (e o secret COBALT_API_KEY se a instância exigir). Instâncias públicas não são usadas.' });
+}
+
+async function ytMeta(cfg, yt, id) {
+  const meta = { title: '', author: '', thumbnail: '', duration: null, live: false, notFound: false, sources: [] };
+  const jobs = [(async () => {
+    try {
+      const r = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(yt.canonical)}`, { headers: { accept: 'application/json', 'user-agent': GENERIC_UA }, signal: timeoutSignal(8000) });
+      log(id, 'yt-oembed', { status: r.status });
+      if (r.status === 404) { meta.notFound = true; return; }
+      if (!r.ok) { try { await r.body?.cancel(); } catch {} return; }
+      const j = await r.json();
+      meta.title = String(j.title || '').slice(0, 200); meta.author = String(j.author_name || '').slice(0, 120);
+      if (/^https:\/\/i\d?\.ytimg\.com\//i.test(j.thumbnail_url || '')) meta.thumbnail = j.thumbnail_url;
+      meta.sources.push('youtube-oembed');
+    } catch (e) { log(id, 'yt-oembed', { error: e?.name || 'erro' }); }
+  })()];
+  if (cfg.ytApiKey) jobs.push((async () => {
+    try {
+      const r = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=contentDetails,snippet&id=${yt.id}&key=${encodeURIComponent(cfg.ytApiKey)}`, { headers: { accept: 'application/json' }, signal: timeoutSignal(8000) });
+      log(id, 'yt-data-api', { status: r.status });
+      if (!r.ok) { try { await r.body?.cancel(); } catch {} return; }
+      const it = (await r.json())?.items?.[0];
+      if (!it) { meta.notFound = true; return; }
+      meta.duration = isoDuration(it.contentDetails?.duration);
+      meta.live = ['live', 'upcoming'].includes(it.snippet?.liveBroadcastContent);
+      if (!meta.title) meta.title = String(it.snippet?.title || '').slice(0, 200);
+      if (!meta.author) meta.author = String(it.snippet?.channelTitle || '').slice(0, 120);
+      meta.sources.push('youtube-data-api-v3');
+    } catch (e) { log(id, 'yt-data-api', { error: e?.name || 'erro' }); }
+  })());
+  await Promise.all(jobs);
+  if (!meta.thumbnail) meta.thumbnail = `https://i.ytimg.com/vi/${yt.id}/hqdefault.jpg`;
+  return meta;
+}
+
+function cobaltError(data, httpStatus) {
+  const code = String(data?.error?.code || ''), c = code.toLowerCase();
+  const E = (st, wcode, msg, hint) => new ProxyError(st, wcode, 'cobalt', msg, { upstreamStatus: httpStatus || null, hint, details: { cobalt: code || null } });
+  if (/(^|\.)auth(\.|$)/.test(c)) return E(502, 'COBALT_AUTH', 'A instância Cobalt recusou a autenticação do Worker.', 'Confira o secret COBALT_API_KEY (esquema Api-Key) e API_AUTH_REQUIRED/API_KEY_URL no Cobalt.');
+  if (/rate|capacity/.test(c)) return E(429, 'COBALT_RATE_LIMIT', 'A instância Cobalt limitou as requisições.', 'Aguarde um minuto ou aumente RATE_LIMIT_MAX no Cobalt; reduza YT_QUALITIES no Worker.');
+  if (/invalid_body|schema|invalid/.test(c) && !/link/.test(c)) return E(502, 'COBALT_BAD_REQUEST', 'A instância Cobalt não aceitou o formato da requisição.', 'Atualize o Cobalt (API v10 ou mais nova).');
+  if (/link\.(invalid|unsupported)|service\.(unsupported|disabled)/.test(c)) return E(422, 'YT_UNSUPPORTED', 'Esta instância Cobalt não aceita este link do YouTube.', c.includes('disabled') ? 'O serviço YouTube está desativado nesta instância (veja SERVICES_DISABLED/ENABLED).' : undefined);
+  if (/video\.private/.test(c)) return E(403, 'VIDEO_PRIVATE', 'O vídeo é privado.');
+  if (/(^|\.)age(\.|$)|youtube\.login|\.login/.test(c)) return E(403, 'YT_LOGIN_REQUIRED', 'O YouTube exigiu login/verificação (restrição de idade ou anti-robô) para esta instância.', 'O Worker não contorna login nem controles de acesso. Em instâncias próprias, o Cobalt tem opções oficiais de sessão (veja a documentação dele).');
+  if (/region/.test(c)) return E(403, 'YT_REGION', 'O vídeo não está disponível na região do servidor Cobalt.');
+  if (/video\.live|live/.test(c)) return E(422, 'YT_LIVE', 'Transmissões ao vivo não são suportadas.');
+  if (/too_long/.test(c)) return E(413, 'YT_TOO_LONG', 'O vídeo excede a duração máxima permitida pela instância Cobalt.');
+  if (/unavailable|not_found|fetch\.empty/.test(c)) return E(404, 'VIDEO_UNAVAILABLE', 'O vídeo está indisponível (removido, privado ou bloqueado).');
+  if (/youtube\.|fetch\.(fail|critical)|decipher|token/.test(c)) return E(502, 'YT_EXTRACTION_FAILED', 'O extrator do Cobalt falhou ao ler o YouTube agora.', 'O YouTube muda com frequência: atualize a instância Cobalt e confira poToken/sessão conforme a documentação dela.');
+  return E(502, 'COBALT_ERROR', `A instância Cobalt devolveu um erro${code ? ` (${code})` : ''}.`);
+}
+function ytBody(yt, spec) {
+  return spec.m === 'audio'
+    ? { url: yt.canonical, downloadMode: 'audio', audioFormat: 'mp3', audioBitrate: '256', filenameStyle: 'classic' }
+    : { url: yt.canonical, downloadMode: 'auto', videoQuality: String(spec.v), youtubeVideoCodec: spec.c || 'h264', filenameStyle: 'classic' };
+}
+async function cobaltCall(cfg, body, id) {
+  needCobalt(cfg);
+  let res;
+  try {
+    res = await fetch(cfg.cobaltUrl, { method: 'POST', redirect: 'error', signal: timeoutSignal(COBALT_TIMEOUT_MS), body: JSON.stringify(body),
+      headers: { accept: 'application/json', 'content-type': 'application/json', ...(cfg.cobaltKey ? { authorization: `Api-Key ${cfg.cobaltKey}` } : {}) } });
+  } catch (e) { throw netError(e, 'cobalt', 'Consulta ao Cobalt', 'a instância Cobalt'); }
+  let data = null; try { data = await res.json(); } catch {}
+  log(id, 'cobalt', { status: res.status, host: cobaltHost(cfg), result: data?.status || null });
+  if (!data || typeof data !== 'object') throw new ProxyError(502, 'COBALT_BAD_RESPONSE', 'cobalt', `A instância Cobalt respondeu HTTP ${res.status} sem JSON válido.`, { upstreamStatus: res.status, hint: 'COBALT_API_URL deve apontar para a raiz da API do Cobalt (POST /), não para o site da interface.' });
+  if (data.status === 'error' || (!res.ok && !data.status)) throw cobaltError(data, res.status);
+  return data;
+}
+function tunnelAllowed(cfg, href, status) {
+  let t; try { t = new URL(href); } catch { return false; }
+  if (t.username || t.password) return false;
+  if (t.hostname === cobaltHost(cfg)) return true;
+  return status === 'redirect' && /(^|\.)googlevideo\.com$/i.test(t.hostname) && t.protocol === 'https:';
+}
+function describeCobaltFile(data, spec) {
+  const fn = String(data.filename || '');
+  if (spec.m === 'audio') return { type: 'audio', container: 'mp3', ext: 'mp3', mime: 'audio/mpeg' };
+  const m = fn.match(/_(\d{3,4})x(\d{3,4})_(h264|vp9|av1)(?:_[^_.]+)?\.([a-z0-9]{2,5})$/i);
+  const ext = (m ? m[4] : (fn.match(/\.([a-z0-9]{2,5})$/i) || [])[1] || '').toLowerCase();
+  const out = { type: 'video', container: ext || null, ext: ext || 'mp4', mime: MIME_BY_EXT[ext] || 'video/mp4', codec: m ? m[3].toLowerCase() : null };
+  if (m) { out.width = +m[1]; out.height = +m[2]; out.quality = Math.min(+m[1], +m[2]); }
+  return out;
+}
+async function tunnelHeaders(cfg, href, id) {
+  try {
+    const r = await fetch(href, { redirect: 'manual', headers: { 'accept-encoding': 'identity' }, signal: timeoutSignal(10000) });
+    log(id, 'cobalt-tunnel-head', { status: r.status, host: hostOf(href) });
+    try { await r.body?.cancel(); } catch {}
+    if (r.status !== 200) return null;
+    const exact = Number(r.headers.get('content-length')) || 0, est = Number(r.headers.get('estimated-content-length')) || 0;
+    return exact ? { bytes: exact, kind: 'exact' } : est ? { bytes: est, kind: 'estimated' } : null;
+  } catch { return null; }
+}
+
+const YT_INFO_CACHE = new Map();
+async function ytInfo(cfg, req, u, target, id) {
+  needCobalt(cfg); await aesKey(cfg);
+  const yt = parseYouTube(target.href);
+  if (!yt) throw new ProxyError(400, 'BAD_YT_URL', 'validate', 'Link do YouTube não reconhecido. Use youtube.com/watch?v=…, youtu.be/…, youtube.com/shorts/… ou /embed/….');
+  rateCheck('resolve', req, cfg.rateResolve);
+  const wantSizes = u.searchParams.get('sizes') === '1';
+  const ck = `${yt.id}|${wantSizes ? 1 : 0}`, hit = YT_INFO_CACHE.get(ck);
+  if (hit && Date.now() - hit.t < YT_INFO_TTL_MS) return json(200, { ...hit.body, requestId: id, cached: true });
+  const meta = await ytMeta(cfg, yt, id);
+  if (meta.notFound) throw new ProxyError(404, 'VIDEO_NOT_FOUND', 'page', 'Vídeo não encontrado (removido, privado ou link errado).');
+  if (meta.live) throw new ProxyError(422, 'YT_LIVE', 'page', 'Transmissões ao vivo (ou estreias agendadas) não são suportadas.');
+  const specs = [...ytTiers(cfg).map(t => ({ m: 'auto', v: t.q, c: t.codec })), { m: 'audio' }];
+  const settled = await Promise.allSettled(specs.map(s => cobaltCall(cfg, ytBody(yt, s), id)));
+  const warnings = [], videos = [], seen = new Set();
+  let audio = null, firstErr = null;
+  for (let i = 0; i < specs.length; i++) {
+    const s = specs[i], r = settled[i];
+    if (r.status === 'rejected') { firstErr ||= r.reason; if (s.m === 'audio' || specs.length > 1) warnings.push(`${s.m === 'audio' ? 'Áudio' : `${s.v}p`}: ${r.reason?.message || 'falhou'}`); continue; }
+    const d = r.value;
+    if (!['tunnel', 'redirect'].includes(d.status) || !d.url || !tunnelAllowed(cfg, d.url, d.status)) { warnings.push(`${s.m === 'audio' ? 'Áudio' : `${s.v}p`}: resposta "${d.status}" do Cobalt não é um download direto.`); continue; }
+    const f = describeCobaltFile(d, s), spec = s.m === 'audio' ? { m: 'audio' } : { m: 'auto', v: s.v, c: s.c };
+    const opt = { ...f, requested: s.m === 'audio' ? null : Number(s.v), _tunnel: d.url, _spec: spec };
+    if (s.m === 'audio') { audio = opt; continue; }
+    if (s.c === 'vp9' && f.quality && f.quality <= 1080) continue;
+    const key = f.quality ? `${f.quality}:${f.codec}:${f.container}` : `req${s.v}`;
+    if (seen.has(key)) continue; seen.add(key);
+    if (!f.quality) warnings.push(`${s.v}p: a instância não informou a resolução final; o rótulo "até ${s.v}p" é o teto pedido, não uma resolução confirmada.`);
+    videos.push(opt);
+  }
+  if (!videos.length && !audio) throw firstErr || new ProxyError(502, 'YT_NO_FORMATS', 'cobalt', 'O Cobalt não devolveu nenhum formato baixável para este vídeo.');
+  videos.sort((a, b) => (b.quality || b.requested || 0) - (a.quality || a.requested || 0) || (a.container === 'mp4' ? -1 : 1));
+  const all = [...videos, ...(audio ? [audio] : [])];
+  if (wantSizes) await Promise.all(all.map(async o => { o.size = await tunnelHeaders(cfg, o._tunnel, id); }));
+  const nameBase = (meta.title || `youtube-${yt.id}`).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || `youtube-${yt.id}`;
+  const options = [];
+  for (const o of all) {
+    const label = o.type === 'audio' ? 'MP3' : `${o.quality ? `${o.quality}p` : `até ${o.requested}p`} · ${String(o.container || '?').toUpperCase()}${o.codec ? ` (${o.codec.toUpperCase()})` : ''}`;
+    const fileBase = o.type === 'audio' ? nameBase : `${nameBase} [${o.quality ? `${o.quality}p` : `${o.requested}p`}]`;
+    const token = await seal(cfg, { k: 'yt', id: yt.id, m: o._spec.m, v: o._spec.v, c: o._spec.c, n: fileBase });
+    options.push({ id: o.type === 'audio' ? 'audio-mp3' : `v-${o.quality || `req${o.requested}`}-${o.codec || 'x'}`, type: o.type, container: o.container, mime: o.mime, codec: o.codec || null,
+      quality: o.quality || null, requestedQuality: o.requested, width: o.width || null, height: o.height || null, bitrateKbps: o.type === 'audio' ? 256 : null, label,
+      size: o.size ? { bytes: o.size.bytes, kind: o.size.kind } : null, fileBase, url: `${u.origin}/yt/dl?t=${token}` });
+  }
+  const body = { ok: true, requestId: id, adapter: 'youtube', id: yt.id, kind: yt.kind, url: yt.canonical, title: meta.title || null, author: meta.author || null, thumbnail: meta.thumbnail,
+    duration: meta.duration, expiresIn: cfg.ttl, options, warnings, sources: { metadata: meta.sources, download: 'cobalt' } };
+  YT_INFO_CACHE.set(ck, { t: Date.now(), body }); while (YT_INFO_CACHE.size > 16) YT_INFO_CACHE.delete(YT_INFO_CACHE.keys().next().value);
+  return json(200, body);
+}
+
+const YT_TUNNELS = new Map();
+async function ytDownload(cfg, req, u, id) {
+  needCobalt(cfg); rateCheck('resolve', req, cfg.rateResolve * 4);
+  const tokenStr = u.searchParams.get('t') || '', p = await unseal(cfg, tokenStr, ['yt']);
+  const yt = { id: p.id, canonical: `https://www.youtube.com/watch?v=${p.id}` };
+  if (!/^[\w-]{11}$/.test(String(p.id))) throw new ProxyError(403, 'BAD_TOKEN', 'auth', 'Token inválido para esta rota.');
+  const spec = p.m === 'audio' ? { m: 'audio' } : { m: 'auto', v: String(p.v), c: p.c || 'h264' };
+  let call; const cached = YT_TUNNELS.get(tokenStr);
+  if (cached && Date.now() - cached.t < YT_TUNNEL_TTL_MS) { call = cached.call; if (req.method !== 'HEAD') YT_TUNNELS.delete(tokenStr); }
+  else {
+    const d = await cobaltCall(cfg, ytBody(yt, spec), id);
+    if (!['tunnel', 'redirect'].includes(d.status) || !d.url) throw new ProxyError(502, 'COBALT_NOT_DIRECT', 'cobalt', `O Cobalt respondeu "${d.status}" em vez de um download direto.`, { hint: d.status === 'local-processing' ? 'Esta instância exige processamento local (remux no cliente); o Worker pede localProcessing=disabled, confira a configuração.' : undefined });
+    if (!tunnelAllowed(cfg, d.url, d.status)) throw new ProxyError(502, 'TUNNEL_HOST', 'cobalt', 'O Cobalt apontou para um host fora da instância configurada; o Worker recusou.', { details: { host: hostOf(d.url) } });
+    call = { url: d.url, status: d.status, file: describeCobaltFile(d, spec) };
+    if (req.method === 'HEAD') { YT_TUNNELS.set(tokenStr, { t: Date.now(), call }); while (YT_TUNNELS.size > 24) YT_TUNNELS.delete(YT_TUNNELS.keys().next().value); }
+  }
+  const f = call.file, name = `${String(p.n || `youtube-${p.id}`).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').trim().slice(0, 100) || 'youtube'}.${f.ext}`;
+  const disp = `attachment; filename="${name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+  const out = new Headers(CORS);
+  out.set('content-disposition', disp); out.set('x-content-type-options', 'nosniff'); out.set('x-optdowns-stage', 'cobalt'); out.set('cache-control', 'no-store');
+  if (f.quality) out.set('x-optdowns-yt-format', `${f.quality}p ${f.container || ''} ${f.codec || ''}`.trim());
+  if (req.method === 'HEAD') { out.set('content-type', f.mime); out.set('accept-ranges', 'none'); return new Response(null, { status: 200, headers: out }); }
+  let res;
+  try {
+    res = await fetch(call.url, { redirect: 'manual', headers: { 'accept-encoding': 'identity', ...(req.headers.get('range') ? { range: req.headers.get('range') } : {}) }, signal: timeoutSignal(CDN_TIMEOUT_MS) });
+  } catch (e) { throw netError(e, 'cdn', 'Download pelo Cobalt', 'a instância Cobalt'); }
+  log(id, 'cdn', { host: hostOf(call.url), status: res.status, kind: 'yt' });
+  if (res.status === 416) return new Response(null, { status: 416, headers: { ...CORS, 'content-range': res.headers.get('content-range') || '' } });
+  if (res.status !== 200 && res.status !== 206) {
+    try { await res.body?.cancel(); } catch {}
+    if (res.status === 404 || res.status === 410) throw new ProxyError(410, 'TUNNEL_EXPIRED', 'cdn', 'O link temporário do Cobalt expirou. Busque o vídeo de novo.', { upstreamStatus: res.status });
+    if (res.status === 429) throw new ProxyError(429, 'COBALT_RATE_LIMIT', 'cdn', 'A instância Cobalt limitou os downloads.', { upstreamStatus: 429, retryAfter: Number(res.headers.get('retry-after')) || 30 });
+    throw new ProxyError(502, 'COBALT_TUNNEL_FAILED', 'cdn', `O Cobalt respondeu HTTP ${res.status} ao entregar o arquivo.`, { upstreamStatus: res.status });
+  }
+  const type = res.headers.get('content-type') || '';
+  if (BAD_MEDIA_TYPE.test(type)) { try { await res.body?.cancel(); } catch {} throw new ProxyError(502, 'NOT_MEDIA', 'cdn', `O Cobalt respondeu "${type.split(';')[0]}" em vez de mídia.`); }
+  const len = Number(res.headers.get('content-length')) || 0, est = Number(res.headers.get('estimated-content-length')) || 0;
+  if (len > cfg.maxBytes || est > cfg.maxBytes) { try { await res.body?.cancel(); } catch {} throw new ProxyError(413, 'TOO_LARGE', 'cdn', 'O arquivo excede o limite configurado no Worker (MAX_BYTES).', { details: { limit: cfg.maxBytes } }); }
+  out.set('content-type', /^(video|audio)\//i.test(type) ? type : f.mime);
+  for (const h of ['content-length', 'content-range', 'accept-ranges']) if (res.headers.get(h)) out.set(h, res.headers.get(h));
+  if (!len && est) out.set('x-optdowns-estimated-length', String(est));
+  return new Response(res.body ? limitStream(res.body, cfg.maxBytes) : null, { status: res.status, headers: out });
+}
+
+async function ytStatus(cfg, id) {
+  const out = { ok: true, requestId: id, configured: { cobaltUrl: !!cfg.cobaltUrl, cobaltKey: !!cfg.cobaltKey, youtubeApiKey: !!cfg.ytApiKey, tokenKey: !!cfg.tokenKey }, tiers: ytTiers(cfg).map(t => `${t.q}:${t.codec}`) };
+  if (!cfg.cobaltUrl) return json(200, { ...out, ok: false, problem: 'COBALT_API_URL não definido: o YouTube está desligado neste Worker.' });
+  if (!cfg.tokenKey) out.ok = false, out.problem = 'Defina TOKEN_KEY (ou SECRET): os links de download do YouTube são tokens cifrados.';
+  try {
+    const r = await fetch(cfg.cobaltUrl, { headers: { accept: 'application/json' }, signal: timeoutSignal(9000) });
+    let d = null; try { d = await r.json(); } catch {}
+    out.cobalt = { httpStatus: r.status, version: d?.cobalt?.version || null, servicesListYoutube: Array.isArray(d?.cobalt?.services) ? d.cobalt.services.includes('youtube') : null };
+    if (!d?.cobalt) { out.ok = false; out.problem ||= 'A URL respondeu, mas não parece ser a API do Cobalt (GET / sem o objeto "cobalt").'; }
+    else if (out.cobalt.servicesListYoutube === false) { out.ok = false; out.problem ||= 'Esta instância Cobalt não lista o serviço YouTube.'; }
+  } catch (e) { out.ok = false; out.cobalt = { reachable: false, error: e?.name === 'TimeoutError' ? 'sem resposta em 9 s' : 'falha de rede' }; out.problem ||= 'O Worker não conseguiu falar com a instância Cobalt.'; }
+  return json(200, out);
+}
+
+// ---------------------------------------------------------------------------
+// Router
+// Request routing, authentication and CORS.
+// ---------------------------------------------------------------------------
 export default {
   async fetch(req, env = {}) {
     const id = rid(), u = new URL(req.url), cfg = configOf(env);
@@ -669,14 +1061,26 @@ export default {
         const kind = route === '/media/video' ? 'mp4' : route === '/media/segment' ? 'seg' : 'key';
         return await streamUpstream(cfg, await unseal(cfg, u.searchParams.get('t') || '', [kind]), req, id, kind);
       }
-      if (route !== '/dl' && route !== '/info') throw new ProxyError(404, 'NO_ROUTE', 'validate', 'Use /dl?url=<link> ou /info?url=<link>.');
+      if (route === '/yt/dl') { return await ytDownload(cfg, req, u, id); }
+      if (route === '/yt/info' || route === '/yt/status') {
+        if (env.SECRET && u.searchParams.get('key') !== env.SECRET) throw new ProxyError(401, 'BAD_KEY', 'auth', 'Chave inválida ou ausente.');
+        if (route === '/yt/status') { rateCheck('resolve', req, cfg.rateResolve); return await ytStatus(cfg, id); }
+        let yurl; try { yurl = new URL(u.searchParams.get('url') || ''); } catch { throw new ProxyError(400, 'BAD_URL', 'validate', 'Parâmetro url ausente ou inválido.'); }
+        return await ytInfo(cfg, req, u, yurl, id);
+      }
+      if (route !== '/dl' && route !== '/info' && route !== '/tt') throw new ProxyError(404, 'NO_ROUTE', 'validate', 'Use /dl?url=<link>, /tt?url=<link> (TikTok), /info?url=<link> ou /yt/info?url=<link> (YouTube).');
       if (env.SECRET && u.searchParams.get('key') !== env.SECRET) throw new ProxyError(401, 'BAD_KEY', 'auth', 'Chave inválida ou ausente.');
       let target;
       try { target = new URL(u.searchParams.get('url') || ''); } catch { throw new ProxyError(400, 'BAD_URL', 'validate', 'Parâmetro url ausente ou inválido.'); }
       if (target.protocol !== 'https:') throw new ProxyError(400, 'BAD_URL', 'validate', 'Só links https.');
+      if (YT_ANY_HOST.test(target.hostname)) throw new ProxyError(400, 'USE_YT_ROUTE', 'validate', 'Links do YouTube usam /yt/info?url=<link> (extração por instância Cobalt própria); o extrator genérico não atende o YouTube.');
+      if (route === '/tt' && !PAGE_HOSTS.test(target.hostname)) throw new ProxyError(400, 'HOST_NOT_ALLOWED', 'validate', '/tt é só para links do TikTok. Use /info para outros sites.');
       if (PAGE_HOSTS.test(target.hostname)) {
+        const q = { part: u.searchParams.get('part') || '', i: u.searchParams.get('i'), n: u.searchParams.get('n'), q: u.searchParams.get('q') || '', key: u.searchParams.get('key') || '' };
+        if (!['', 'video', 'image', 'audio', 'cover'].includes(q.part)) throw new ProxyError(400, 'BAD_PART', 'validate', 'part deve ser video, image, audio ou cover.');
+        if (route === '/tt') return await handleTiktok(req, target, id, trace, debug, q, u.origin, true);
         if (route === '/info') return json(200, { ok: true, requestId: id, adapter: 'tiktok', candidates: [{ kind: 'mp4', url: `${u.origin}/dl?url=${encodeURIComponent(target.href)}`, needsKey: !!env.SECRET }] });
-        return await handleTiktok(req, target, id, trace, debug);
+        return await handleTiktok(req, target, id, trace, debug, q, u.origin, false);
       }
       if (!hostAllowed(cfg, target.hostname) || !safeUrl(target.href)) {
         throw new ProxyError(400, 'HOST_NOT_ALLOWED', 'validate', cfg.hosts.length || cfg.any
@@ -694,6 +1098,10 @@ export default {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Diagnostics page
+// HTML served at /diagnostico.
+// ---------------------------------------------------------------------------
 const DIAG_HTML = `<!doctype html>
 <html lang="pt-BR">
 <head>

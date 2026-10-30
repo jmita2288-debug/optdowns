@@ -4,9 +4,10 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-a8f500?style=flat-square"></a>
-  <img alt="Version 2.12.0" src="https://img.shields.io/badge/version-2.12.0-2ea043?style=flat-square">
+  <img alt="Version 2.13.0" src="https://img.shields.io/badge/version-2.13.0-2ea043?style=flat-square">
   <img alt="Userscript" src="https://img.shields.io/badge/userscript-GM%20API-0d1117?style=flat-square">
   <img alt="mux.js 6.3.0" src="https://img.shields.io/badge/mux.js-6.3.0-7c6cf0?style=flat-square">
+  <img alt="lamejs 1.2.1" src="https://img.shields.io/badge/lamejs-1.2.1-e11d48?style=flat-square">
   <img alt="Cloudflare Workers (optional)" src="https://img.shields.io/badge/Cloudflare%20Workers-optional-f6821f?style=flat-square">
 </p>
 
@@ -16,11 +17,11 @@
 
 ---
 
-**OPTDOWNS** is a free, open-source browser userscript for detecting and downloading videos. It helps save direct video files and HLS/M3U8 streams as MP4, processing media locally in your browser with [mux.js](https://github.com/videojs/mux.js) without requiring your own server.
+OPTDOWNS is a userscript that finds the videos on the page you are browsing and saves them as regular MP4 files. It works without a server: HLS streams are downloaded segment by segment and converted to MP4 inside your browser, using [mux.js](https://github.com/videojs/mux.js). You can also paste the link of a public TikTok, Instagram or YouTube post and choose what to save: video, photos, audio or MP3.
 
-It was designed for phones, including the iPhone Safari save flow, and also supports desktop browsers. Compatibility depends on the source website, browser, and userscript manager.
+It was built for phones first, so the panel is touch friendly and the save flow takes the quirks of iOS Safari into account. On desktop it behaves the same way.
 
-> The interface has a language selector for Brazilian Portuguese, English, and Spanish. Some messages may still appear in Portuguese; contributions to improve translations are welcome. See [Contributing](#contributing).
+> The interface is currently in Brazilian Portuguese. Translations are welcome, see [Contributing](#contributing).
 
 ## Contents
 
@@ -30,6 +31,7 @@ It was designed for phones, including the iPhone Safari save flow, and also supp
 - [Install](#install)
 - [Using it](#using-it)
 - [Optional Cloudflare Worker](#optional-cloudflare-worker)
+- [YouTube support](#youtube-support)
 - [Configuration](#configuration)
 - [Privacy and network behavior](#privacy-and-network-behavior)
 - [Limitations](#limitations)
@@ -47,6 +49,9 @@ It was designed for phones, including the iPhone Safari save flow, and also supp
 - **Direct files.** MP4, WebM and MOV links are fetched in ranged chunks with retries, so large files do not depend on one long request.
 - **Quality picker.** Variants of the same video are grouped, and you choose the quality before the download starts.
 - **Download by link.** Paste a link to a file, a playlist, a public TikTok or Instagram post, or a page full of videos. The "This video" and "Videos on the page" sections are kept separate so you can browse the list and pick one.
+- **Photos, audio and MP3.** Photo posts can be saved one by one or as a ZIP. Audio can be saved as MP3 with a selectable bitrate, encoded in the browser with [lamejs](https://github.com/zhuker/lamejs).
+- **YouTube videos and Shorts.** Through your own Worker and your own Cobalt instance. Only the options Cobalt confirmed are listed. See [YouTube support](#youtube-support).
+- **Queue and draggable panel.** Downloads run one at a time and the rest wait in a queue. The floating button and the panel can be dragged, and they remember where you left them.
 - **Output checks.** The file is inspected before it is saved, so an HTML error page does not end up named `video.mp4`. After saving you get a short summary of codecs and resolution.
 - **Built-in diagnostics.** A report tab runs environment checks, keeps a log of recent errors with suggested fixes, and can copy a report with tokens and cookies masked.
 - **Site logos and thumbnails.** Source logos are cached locally, and thumbnails are loaded with the referrer the site expects.
@@ -76,6 +81,8 @@ It was designed for phones, including the iPhone Safari save flow, and also supp
 | HLS to MP4 | [mux.js](https://github.com/videojs/mux.js) 6.3.0 | Loaded from unpkg, runs in a Web Worker |
 | MP4 inspection | Own ISO BMFF box parser | Used to validate output and describe codecs |
 | Local decryption | Web Crypto API | AES-128 HLS segments with a public key |
+| MP3 encoding | [lamejs](https://github.com/zhuker/lamejs) 1.2.1 | Loaded from unpkg, runs in the page |
+| YouTube backend | [Cobalt](https://github.com/imputnet/cobalt) API | Your own instance, called only by your Worker |
 | Optional proxy | Cloudflare Workers | Plain JavaScript, no dependencies, see [`worker/`](worker/) |
 
 ## Install
@@ -95,18 +102,26 @@ Open any page, tap the floating button and the panel slides in.
 
 - **On this page** lists what the script detected while you browse. Pick a quality, tap download, and the progress is shown on the card.
 - **By link** takes a pasted URL. Use the clear button to wipe the field and paste the next one. Recent links are one tap away.
-- **Sources** shows the kinds of links it understands: public TikTok and Instagram posts, direct video files, `.m3u8` playlists, and pages that contain several videos.
+- **Sources** shows the kinds of links it understands: public TikTok and Instagram posts, YouTube videos and Shorts, direct video files, `.m3u8` playlists, and pages that contain several videos. On youtube.com the script does not scan the page by itself, so paste the link in **By link**.
 - **Diagnostics** checks the environment, shows recent errors with hints, applies the safe fixes and copies a report you can attach to an issue.
 
 Some sites only release their media inside their own player. When that is the case the script says so instead of guessing.
 
 ## Optional Cloudflare Worker
 
-The Worker is a fallback, not a requirement. The script resolves most links by itself in the browser. A Worker helps when a CDN refuses direct requests from the browser, which is common with TikTok links.
+The Worker is a fallback, not a requirement. The script resolves most links by itself in the browser. A Worker helps when a CDN refuses direct requests from the browser, which is common with TikTok links. It is also the bridge to your Cobalt instance, so it is required for YouTube.
 
 **This repository does not ship a hosted Worker, and you should not use someone else's.** Deploy your own copy from [`worker/worker.js`](worker/worker.js). The step-by-step guide, the environment variables and the security model are in [`worker/README.md`](worker/README.md).
 
 Once it is deployed, paste its address into `LINK_PROXY` at the top of the userscript.
+
+## YouTube support
+
+YouTube links work through your Worker, which talks to a [Cobalt](https://github.com/imputnet/cobalt) instance that **you** host. Cobalt needs Node and ffmpeg, so it cannot run on Cloudflare Workers.
+
+No public or community Cobalt instance is built in, on purpose: the Cobalt project asks that hosted instances are not used by other projects without permission. Without `COBALT_API_URL` the Worker simply keeps YouTube off and says why.
+
+The full setup, variables and limits are in [docs/YOUTUBE.md](docs/YOUTUBE.md).
 
 ## Configuration
 
@@ -116,16 +131,19 @@ The settings live at the top of `optdowns.user.js`:
 | --- | --- | --- |
 | `LINK_PROXY` | `''` | Address of your Worker. Empty means the Worker is never contacted. |
 | `LINK_PROXY_KEY` | `''` | Same value as the Worker's `SECRET`, only if you set one. |
-| `LINK_PROXY_GENERIC` | `true` | Allow non-TikTok links to use the Worker as a last resort. Set to `false` to send only TikTok links. |
+| `LINK_PROXY_GENERIC` | `true` | Let non-TikTok sites use the Worker as a last resort. Set to `false` to keep other sites off the Worker. |
+| `LINK_PROXY_YOUTUBE` | `true` | Send YouTube links to your Worker. Set to `false` to disable YouTube. |
+| `LINK_PROXY_YOUTUBE_SIZES` | `false` | Ask Cobalt for each option's size while searching. Shows sizes earlier but costs more requests to Cobalt. |
 
 ## Privacy and network behavior
 
 OPTDOWNS has no accounts, no analytics and no telemetry. Still, a downloader has to talk to the network, so here is exactly what it does:
 
 - **Media requests** go straight from your browser to the site that hosts the media, through the userscript manager.
-- **mux.js** is fetched from `unpkg.com`, pinned to version 6.3.0.
+- **mux.js and lamejs** are fetched from `unpkg.com`, pinned to versions 6.3.0 and 1.2.1.
 - **Site logos** are requested from public favicon services (Google and DuckDuckGo). Only the site's hostname is sent, and the result is cached in `localStorage`.
-- **Local storage** keeps your last few links, the logo cache and a first-run flag. Nothing else is persisted.
+- **Local storage** and the userscript manager's own storage keep your last few links, the logo cache, the positions of the button and panel, and a first-run flag. Nothing else is persisted.
+- **YouTube links**, if you enable them, go to your Worker. It asks YouTube's oEmbed endpoint for the title and thumbnail, optionally the YouTube Data API for the duration, and your Cobalt instance for the files.
 - **Your Worker**, if you configure one, receives the link you are downloading and a small test request when you run the diagnostics. Nothing else is sent to it.
 
 The diagnostic report masks tokens, cookies and query strings before you copy it.
@@ -134,6 +152,8 @@ The diagnostic report masks tokens, cookies and query strings before you copy it
 
 - No DRM. Widevine, PlayReady, FairPlay and SAMPLE-AES streams are refused, and so are paywalls and login walls.
 - Separate DASH video and audio tracks are not merged.
+- YouTube depends on your own Cobalt instance, and YouTube changes often, so expect to update it. Playlists, live streams and anything that needs a login are not supported.
+- Files pass through browser memory, so very large downloads can fail on phones.
 - Some sites bind their media to the player session, the network or a browser token. Outside the player those URLs are rejected, and the script reports it.
 - Sites change. Extraction for a specific platform can break without notice, which is why the diagnostics tab exists.
 - iOS Safari can require one extra tap to save. That is a browser rule.
@@ -141,6 +161,8 @@ The diagnostic report masks tokens, cookies and query strings before you copy it
 ## Responsible use
 
 Use OPTDOWNS for content you have the right to save, such as your own uploads, public-domain or openly licensed videos, and material you are permitted to keep offline. Respect the terms of the sites you visit and the copyright of the people who made the videos.
+
+Downloading videos from YouTube can violate its Terms of Service and the copyright of the creator. Use it for your own or licensed content. For your own videos, YouTube Studio and Google Takeout are better options.
 
 The project does not remove DRM and does not help with access control of any kind. It is provided as is, and you are responsible for how you use it. It is not affiliated with TikTok, Instagram, Cloudflare or Brightcove.
 
@@ -152,6 +174,7 @@ The project does not remove DRM and does not help with access control of any kin
 | HTTP 403, 404 or 410 on download | The signed URL expired. Reopen the video so the page publishes a new one, or paste the page link again. |
 | Download opens the video instead of saving | Your browser blocked the automatic save. Use the manual save button the panel shows. |
 | `mux.js` did not load | Reinstall with the network on and make sure `unpkg.com` is reachable. |
+| YouTube says it is not configured | Set `COBALT_API_URL` in the Worker, then open `/yt/status?key=YOUR_SECRET` or run the diagnostics tab. |
 | A Worker error appears | Run the diagnostics tab, then check `LINK_PROXY`, `ALLOWED_HOSTS`, `TOKEN_KEY` and `SECRET`. |
 
 When you open an issue, attach the report from the diagnostics tab. It is safe to share.
@@ -161,6 +184,8 @@ When you open an issue, attach the report from the diagnostics tab. It is safe t
 OPTDOWNS stands on the work of others:
 
 - **[mux.js](https://github.com/videojs/mux.js)** by Brightcove and the Video.js contributors, Apache-2.0. It does the MPEG-TS to MP4 conversion. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- **[lamejs](https://github.com/zhuker/lamejs)**, a JavaScript port of the LAME MP3 encoder, LGPL-3.0. It encodes the MP3 files.
+- **[Cobalt](https://github.com/imputnet/cobalt)** by imput, AGPL-3.0. Used only through its HTTP API, on an instance you run.
 - **[Cloudflare Workers](https://developers.cloudflare.com/workers/)** runs the optional proxy.
 - **[yt-dlp](https://github.com/yt-dlp/yt-dlp)** is a long-standing reference for how public media endpoints behave. No yt-dlp code is included here.
 - **Tampermonkey and the GM API** make a cross-origin userscript like this possible.

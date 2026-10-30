@@ -6,7 +6,7 @@ An example Cloudflare Worker that works as an optional fallback for the OPTDOWNS
 
 ## When you need it
 
-The userscript downloads directly from the browser whenever it can. A Worker is useful when a CDN refuses direct requests from the browser, which happens a lot with TikTok links. Without any configuration the Worker only serves TikTok. Other sites have to be allow-listed.
+The userscript downloads directly from the browser whenever it can. A Worker is useful when a CDN refuses direct requests from the browser, which happens a lot with TikTok links. Without any configuration the Worker only serves TikTok. Other sites have to be allow-listed. For YouTube, the Worker is the bridge to a Cobalt instance that you host, see [`../docs/YOUTUBE.md`](../docs/YOUTUBE.md).
 
 This is meant to be **your own private deployment**. Do not share its address and do not run it as a public service.
 
@@ -38,6 +38,8 @@ ALLOWED_HOSTS = "example.com"
 npx wrangler login
 npx wrangler secret put TOKEN_KEY
 npx wrangler secret put SECRET      # optional
+npx wrangler secret put COBALT_API_KEY    # only if your Cobalt instance asks for a key
+npx wrangler secret put YOUTUBE_API_KEY   # optional, only for the video duration
 npx wrangler deploy
 ```
 
@@ -56,6 +58,10 @@ All variables are optional. With none set, the Worker serves TikTok only.
 | `MAX_BYTES` | Size limit for one MP4. Default 2 GiB. |
 | `RATE_RESOLVE_PER_MIN` | Link resolutions per IP per minute. Default 30. |
 | `RATE_MEDIA_PER_MIN` | Media requests per IP per minute. Default 1500. |
+| `COBALT_API_URL` | Root of the API of **your** Cobalt instance, such as `https://cobalt.example.com/`. HTTPS on port 443. Without it, YouTube stays off. |
+| `COBALT_API_KEY` | Secret. Sent as `Authorization: Api-Key ...` if your instance requires it. Never reaches the browser. |
+| `YOUTUBE_API_KEY` | Secret. YouTube Data API v3 key, used only to show the duration. |
+| `YT_QUALITIES` | Tiers tested for each search. Default `2160:vp9,1440:vp9,1080,720,480,360`. Each tier costs one request to Cobalt per search. |
 
 Rate limits are best effort and apply per Worker instance.
 
@@ -64,9 +70,14 @@ Rate limits are best effort and apply per Worker instance.
 | Route | What it does |
 | --- | --- |
 | `GET /dl?url=<link>` | TikTok: streams the MP4. Allowed sites: streams the best MP4 found. Supports `Range` and `HEAD`. |
+| `GET /dl?url=<tiktok>&part=video`, `image`, `audio` or `cover` | A specific part of a TikTok post: a video option (`&n=`, or `&q=sd` for the lightest), photo number `&i=`, the sound, or the cover. |
+| `GET /tt?url=<tiktok>` | JSON with the post type (video or photo), video options (HD/SD), photos, audio and cover, with ready `/dl` URLs. |
 | `GET /info?url=<link>` | Returns JSON with the candidates (MP4 and HLS) and token URLs for them. |
 | `GET /hls/playlist.m3u8?t=<token>` | An HLS playlist rewritten so the segments pass through the Worker. |
 | `GET /media/video`, `/media/segment`, `/media/key` with `?t=<token>` | Streams media that the Worker itself discovered and sealed into a token. |
+| `GET /yt/info?url=<youtube>` | JSON with title, thumbnail, duration and the options (MP4, WebM, MP3) that your Cobalt instance confirmed. Needs `COBALT_API_URL`. |
+| `GET /yt/dl?t=<token>` | Streams the chosen file. The token carries only the parameters, and Cobalt is asked at download time. |
+| `GET /yt/status` | Real check of the YouTube setup: configuration plus a request to your Cobalt instance. |
 | `GET /diagnostico` | A small HTML page that tests the Worker step by step. |
 | `GET /dl?url=<link>&debug=1` | JSON report of each stage. Add `&probe=1` to also test the media from the server side. |
 
@@ -83,6 +94,7 @@ This Worker is built so it cannot be used as an open proxy:
 - DRM (SAMPLE-AES, Widevine, PlayReady, FairPlay) is refused. Only unencrypted HLS or AES-128 with a public key is accepted.
 - It does not fake sessions or IPs. It sends a regular browser user agent, the site's own Referer and Origin, and only the cookies the site gave to the Worker.
 - Logs contain only the stage, the status and the hostname. No cookies, tokens, query strings or signed URLs.
+- API keys stay inside the Worker and are never sent to the browser. A Cobalt tunnel on an unexpected host is refused.
 
 What it cannot do: `SECRET` lives inside the userscript on your device, so treat it as a light lock and not as strong authentication. Some platforms block Cloudflare IP ranges. When that happens the Worker reports `ORIGIN_BLOCKED` and does not try to work around it.
 
@@ -102,6 +114,8 @@ Site support lives in the `EXTRACTORS` list inside `worker.js`. An extractor tak
 Um Cloudflare Worker de exemplo que funciona como alternativa opcional para o userscript OPTDOWNS. JavaScript puro, sem dependências, em um arquivo: [`worker.js`](worker.js).
 
 ### Quando você precisa dele
+
+Para o YouTube, o Worker é a ponte até uma instância do Cobalt hospedada por você, veja [`../docs/YOUTUBE.pt-BR.md`](../docs/YOUTUBE.pt-BR.md).
 
 O userscript baixa direto do navegador sempre que consegue. O Worker ajuda quando um CDN recusa requisições diretas do navegador, o que acontece bastante com links do TikTok. Sem nenhuma configuração, o Worker atende só o TikTok. Os outros sites precisam entrar em uma lista de permitidos.
 
@@ -134,6 +148,10 @@ Todas são opcionais. Sem nenhuma, o Worker atende só o TikTok.
 | `MAX_BYTES` | Limite de tamanho de um MP4. Padrão 2 GiB. |
 | `RATE_RESOLVE_PER_MIN` | Resoluções de link por IP por minuto. Padrão 30. |
 | `RATE_MEDIA_PER_MIN` | Requisições de mídia por IP por minuto. Padrão 1500. |
+| `COBALT_API_URL` | Raiz da API da **sua** instância do Cobalt, como `https://cobalt.exemplo.com/`. HTTPS na porta 443. Sem ela, o YouTube fica desligado. |
+| `COBALT_API_KEY` | Secret. Enviada como `Authorization: Api-Key ...` se a sua instância exigir. Nunca vai ao navegador. |
+| `YOUTUBE_API_KEY` | Secret. Chave da YouTube Data API v3, usada só para mostrar a duração. |
+| `YT_QUALITIES` | Camadas testadas a cada busca. Padrão `2160:vp9,1440:vp9,1080,720,480,360`. Cada camada custa uma requisição ao Cobalt por busca. |
 
 Os limites por IP são de melhor esforço e valem por instância do Worker.
 
