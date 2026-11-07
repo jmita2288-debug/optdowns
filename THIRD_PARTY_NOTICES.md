@@ -23,7 +23,7 @@ OPTDOWNS is released under the MIT License (see `LICENSE`). It uses the followin
 
 - Project: https://github.com/imputnet/cobalt
 - License: AGPL-3.0, as the project states
-- Use: backend for YouTube downloads. The Worker only calls its HTTP API, on an instance that you host yourself.
+- Use: backend for YouTube and Instagram downloads. The Worker only calls its HTTP API, on an instance that you host yourself.
 - No Cobalt code is included here and no public instance is built in. If you modify and host Cobalt, the AGPL applies to your instance.
 
 ## Services contacted at runtime
@@ -37,7 +37,8 @@ These are services, not bundled code. They are listed so you know what the scrip
 | DuckDuckGo icons (icons.duckduckgo.com) | Site logos, fallback | Site hostname |
 | Your Cloudflare Worker (optional) | Fallback download proxy and YouTube bridge | The link being downloaded |
 | YouTube oEmbed and Data API (optional, through your Worker) | Title, thumbnail and duration of YouTube videos | The video link or id |
-| Your Cobalt instance (optional, through your Worker) | YouTube files | The video link and chosen quality |
+| Your Cobalt instance (optional, through your Worker) | YouTube and Instagram files | The link and the chosen quality |
+| Instagram public page (optional, through your Worker) | Preview image and title | The post link |
 
 ## Trademarks
 

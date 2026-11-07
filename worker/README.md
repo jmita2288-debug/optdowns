@@ -6,7 +6,7 @@ An example Cloudflare Worker that works as an optional fallback for the OPTDOWNS
 
 ## When you need it
 
-The userscript downloads directly from the browser whenever it can. A Worker is useful when a CDN refuses direct requests from the browser, which happens a lot with TikTok links. Without any configuration the Worker only serves TikTok. Other sites have to be allow-listed. For YouTube, the Worker is the bridge to a Cobalt instance that you host, see [`../docs/YOUTUBE.md`](../docs/YOUTUBE.md).
+The userscript downloads directly from the browser whenever it can. A Worker is useful when a CDN refuses direct requests from the browser, which happens a lot with TikTok links. Without any configuration the Worker only serves TikTok. Other sites have to be allow-listed. For YouTube, the Worker is the bridge to a Cobalt instance that you host, see [`../docs/COBALT.md`](../docs/COBALT.md).
 
 This is meant to be **your own private deployment**. Do not share its address and do not run it as a public service.
 
@@ -61,7 +61,8 @@ All variables are optional. With none set, the Worker serves TikTok only.
 | `COBALT_API_URL` | Root of the API of **your** Cobalt instance, such as `https://cobalt.example.com/`. HTTPS on port 443. Without it, YouTube stays off. |
 | `COBALT_API_KEY` | Secret. Sent as `Authorization: Api-Key ...` if your instance requires it. Never reaches the browser. |
 | `YOUTUBE_API_KEY` | Secret. YouTube Data API v3 key, used only to show the duration. |
-| `YT_QUALITIES` | Tiers tested for each search. Default `2160:vp9,1440:vp9,1080,720,480,360`. Each tier costs one request to Cobalt per search. |
+| `COBALT_CONCURRENCY`, `COBALT_GAP_MS`, `COBALT_RETRIES`, `COBALT_BACKOFF_MS`, `COBALT_COOLDOWN_MS` | Limit and space out the calls to Cobalt. Defaults 2, 150, 2, 700 and 8000. See [`../docs/COBALT.md`](../docs/COBALT.md). |
+| `YT_QUALITIES` | Tiers tested for each search. Default `2160:vp9,1440:vp9,1080,720,480,360,240`. Each tier costs one request to Cobalt per search. |
 
 Rate limits are best effort and apply per Worker instance.
 
@@ -77,7 +78,9 @@ Rate limits are best effort and apply per Worker instance.
 | `GET /media/video`, `/media/segment`, `/media/key` with `?t=<token>` | Streams media that the Worker itself discovered and sealed into a token. |
 | `GET /yt/info?url=<youtube>` | JSON with title, thumbnail, duration and the options (MP4, WebM, MP3) that your Cobalt instance confirmed. Needs `COBALT_API_URL`. |
 | `GET /yt/dl?t=<token>` | Streams the chosen file. The token carries only the parameters, and Cobalt is asked at download time. |
-| `GET /yt/status` | Real check of the YouTube setup: configuration plus a request to your Cobalt instance. |
+| `GET /ig/info?url=<instagram>` | JSON with the items of a Reel, post or carousel. Needs `COBALT_API_URL`. |
+| `GET /ig/dl?t=<token>` | Streams one Instagram item. `&probe=1` checks it without opening the tunnel, and the same works on `/yt/dl`. |
+| `GET /yt/status` | Real check of the Cobalt setup: configuration plus a request to your Cobalt instance. |
 | `GET /diagnostico` | A small HTML page that tests the Worker step by step. |
 | `GET /dl?url=<link>&debug=1` | JSON report of each stage. Add `&probe=1` to also test the media from the server side. |
 
@@ -115,7 +118,7 @@ Um Cloudflare Worker de exemplo que funciona como alternativa opcional para o us
 
 ### Quando você precisa dele
 
-Para o YouTube, o Worker é a ponte até uma instância do Cobalt hospedada por você, veja [`../docs/YOUTUBE.pt-BR.md`](../docs/YOUTUBE.pt-BR.md).
+Para o YouTube, o Worker é a ponte até uma instância do Cobalt hospedada por você, veja [`../docs/COBALT.pt-BR.md`](../docs/COBALT.pt-BR.md).
 
 O userscript baixa direto do navegador sempre que consegue. O Worker ajuda quando um CDN recusa requisições diretas do navegador, o que acontece bastante com links do TikTok. Sem nenhuma configuração, o Worker atende só o TikTok. Os outros sites precisam entrar em uma lista de permitidos.
 
@@ -151,7 +154,8 @@ Todas são opcionais. Sem nenhuma, o Worker atende só o TikTok.
 | `COBALT_API_URL` | Raiz da API da **sua** instância do Cobalt, como `https://cobalt.exemplo.com/`. HTTPS na porta 443. Sem ela, o YouTube fica desligado. |
 | `COBALT_API_KEY` | Secret. Enviada como `Authorization: Api-Key ...` se a sua instância exigir. Nunca vai ao navegador. |
 | `YOUTUBE_API_KEY` | Secret. Chave da YouTube Data API v3, usada só para mostrar a duração. |
-| `YT_QUALITIES` | Camadas testadas a cada busca. Padrão `2160:vp9,1440:vp9,1080,720,480,360`. Cada camada custa uma requisição ao Cobalt por busca. |
+| `COBALT_CONCURRENCY`, `COBALT_GAP_MS`, `COBALT_RETRIES`, `COBALT_BACKOFF_MS`, `COBALT_COOLDOWN_MS` | Limitam e espaçam as chamadas ao Cobalt. Padrões 2, 150, 2, 700 e 8000. Veja [`../docs/COBALT.pt-BR.md`](../docs/COBALT.pt-BR.md). |
+| `YT_QUALITIES` | Camadas testadas a cada busca. Padrão `2160:vp9,1440:vp9,1080,720,480,360,240`. Cada camada custa uma requisição ao Cobalt por busca. |
 
 Os limites por IP são de melhor esforço e valem por instância do Worker.
 

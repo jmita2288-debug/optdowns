@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         OPTDOWNS
 // @namespace    video-direct-downloader
-// @version      2.13.0
+// @version      2.14.0
 // @description  OPTDOWNS: vídeo (HD), fotos, áudio e MP3 de TikTok/Instagram, vídeos e Shorts do YouTube (via seu Worker + Cobalt), vídeo e áudio HLS locais, seleção de faixas, páginas com vários vídeos, botão e painel móveis (arraste) e painel para celular.
-// @description:en  OPTDOWNS: video (HD), photos, audio and MP3 from TikTok/Instagram, YouTube videos and Shorts (via your own Worker and Cobalt), local HLS video and audio, track selection, multi-video pages and a draggable mobile-first panel.
+// @description:en  OPTDOWNS: video (HD), photos, audio and MP3 from TikTok/Instagram, YouTube videos and Shorts and Instagram Reels (via your own Worker and Cobalt), local HLS video and audio, track selection, multi-video pages and a draggable mobile-first panel.
 // @author       jmita2288-debug
 // @license      MIT
 // @homepageURL  https://github.com/jmita2288-debug/optdowns
@@ -84,7 +84,11 @@
   const LINK_PROXY_YOUTUBE = true;
   // true asks Cobalt for each option's size while searching (more requests to Cobalt).
   const LINK_PROXY_YOUTUBE_SIZES = false;
-  const SCRIPT_VERSION = '2.13.0';
+  // Instagram in "By link" through your Worker and Cobalt. false keeps it on the anonymous public read.
+  const LINK_PROXY_INSTAGRAM = true;
+  // 'cobalt-first': original file from Cobalt, public read as fallback. 'local-first': the other way around.
+  const LINK_PROXY_INSTAGRAM_ORDER = 'cobalt-first';
+  const SCRIPT_VERSION = '2.14.0';
   // Network timeouts, retry count and the Range chunk size.
   const NET = Object.freeze({
     pageIdleTimeout: 90000,
@@ -573,6 +577,8 @@
 #vdd-root .vdd-yt-quality:disabled { opacity: .55; cursor: progress; }
 #vdd-root .vdd-yt-quality optgroup { color: var(--muted); font-style: normal; }
 #vdd-root .vdd-yt-note { margin: 8px 0 0; font-size: 11.5px; }
+#vdd-root .vdd-yt-stage { margin: 12px 2px 0; font-size: 12px; color: var(--muted); text-align: center; }
+#vdd-root .vdd-yt-error strong { color: var(--text); }
 #vdd-root .vdd-yt-skel { display: flex; gap: 12px; padding: 15px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-raised); animation: vdd-rise .3s var(--ease-out) both; }
 #vdd-root .vdd-yt-skel-thumb { flex: 0 0 38%; max-width: 168px; aspect-ratio: 16 / 9; border-radius: 9px; }
 #vdd-root .vdd-yt-skel-lines { flex: 1 1 auto; display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
@@ -821,7 +827,6 @@
 }
   `;
   const CSS2 = `
-/* ---- 2.12.0: HD, imagens, áudio, ZIP e MP3 ---- */
 #vdd-root .vdd-badge.vdd-chip-hd { border-color: rgba(168, 245, 0, .4); color: var(--accent-ink); background: linear-gradient(180deg, #c9ff45, var(--accent)); font-weight: 780; }
 #vdd-root .vdd-actions.vdd-actions-sub { gap: 8px; margin-top: -3px; align-items: stretch; }
 #vdd-root .vdd-actions-sub .vdd-btn { flex: 1 1 auto; min-height: 42px; font-size: 12.5px; }
@@ -842,6 +847,12 @@
   #vdd-root .vdd-card[data-media="zip"] .vdd-thumb { aspect-ratio: 16 / 10; max-height: 12rem; }
   #vdd-root .vdd-card[data-media="audio"] .vdd-thumb { aspect-ratio: 16 / 7; max-width: none; }
 }
+#vdd-root .vdd-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+#vdd-root .vdd-footer-text { flex: 1 1 auto; min-width: 0; text-align: left; }
+#vdd-root .vdd-langs { display: flex; flex: 0 0 auto; gap: 6px; }
+#vdd-root .vdd-lang { display: grid; place-items: center; width: 36px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); opacity: .6; transition: opacity .18s ease, border-color .18s ease, transform .18s var(--ease-out); }
+#vdd-root .vdd-lang svg { display: block; width: 22px; height: 15px; border-radius: 3px; }
+#vdd-root .vdd-lang[aria-pressed="true"] { border-color: var(--accent); opacity: 1; }
 `;
 
   // ---------------------------------------------------------------------------
@@ -1085,6 +1096,377 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Language
+  // Interface language (Portuguese, English, Spanish). The panel text is translated in place.
+  // ---------------------------------------------------------------------------
+  const LANGS = [
+    { id: 'pt', label: 'Portuguese (Brazil)', flag: '<svg viewBox="0 0 24 16" aria-hidden="true"><rect width="24" height="16" fill="#009c3b"/><path d="M12 2.2 21.2 8 12 13.8 2.8 8z" fill="#ffdf00"/><circle cx="12" cy="8" r="3.3" fill="#002776"/></svg>' },
+    { id: 'en', label: 'English', flag: '<svg viewBox="0 0 24 16" aria-hidden="true"><rect width="24" height="16" fill="#fff"/><g fill="#b22234"><rect width="24" height="1.23"/><rect y="2.46" width="24" height="1.23"/><rect y="4.92" width="24" height="1.23"/><rect y="7.38" width="24" height="1.23"/><rect y="9.85" width="24" height="1.23"/><rect y="12.31" width="24" height="1.23"/><rect y="14.77" width="24" height="1.23"/></g><rect width="10.4" height="8.6" fill="#3c3b6e"/><g fill="#fff"><circle cx="2" cy="1.8" r=".6"/><circle cx="5.2" cy="1.8" r=".6"/><circle cx="8.4" cy="1.8" r=".6"/><circle cx="3.6" cy="4.3" r=".6"/><circle cx="6.8" cy="4.3" r=".6"/><circle cx="2" cy="6.8" r=".6"/><circle cx="5.2" cy="6.8" r=".6"/><circle cx="8.4" cy="6.8" r=".6"/></g></svg>' },
+    { id: 'es', label: 'Spanish', flag: '<svg viewBox="0 0 24 16" aria-hidden="true"><rect width="24" height="16" fill="#aa151b"/><rect y="4" width="24" height="8" fill="#f1bf00"/></svg>' },
+  ];
+  // [Portuguese, English, Spanish]. Text that is not listed here stays in Portuguese.
+  const I18N_ROWS = [
+    ['Abrir downloads (arraste para mover)', 'Open downloads (drag to move)', 'Abrir descargas (arrastra para mover)'],
+    ['Baixar vídeos', 'Download videos', 'Descargar vídeos'],
+    ['DOWNLOADS NO NAVEGADOR', 'DOWNLOADS IN THE BROWSER', 'DESCARGAS EN EL NAVEGADOR'],
+    ['Procurando mídia...', 'Looking for media...', 'Buscando medios...'],
+    ['Expandir em tela cheia', 'Expand to full screen', 'Expandir a pantalla completa'],
+    ['Recolher painel', 'Collapse panel', 'Contraer panel'],
+    ['Atualizar', 'Refresh', 'Actualizar'],
+    ['Diagnóstico e correção', 'Diagnostics and fixes', 'Diagnóstico y corrección'],
+    ['Fechar', 'Close', 'Cerrar'],
+    ['Origem do vídeo', 'Video source', 'Origen del vídeo'],
+    ['Nesta página', 'On this page', 'En esta página'],
+    ['Por link', 'By link', 'Por enlace'],
+    ['Sites', 'Sites', 'Sitios'],
+    ['Buscar', 'Search', 'Buscar'],
+    ['Colar link', 'Paste link', 'Pegar enlace'],
+    ['Limpar tudo', 'Clear all', 'Borrar todo'],
+    ['Cancelar busca', 'Cancel search', 'Cancelar búsqueda'],
+    ['Este vídeo', 'This video', 'Este vídeo'],
+    ['Vídeos da página', 'Videos on the page', 'Vídeos de la página'],
+    ['Escolha uma fonte para ver o formato de link aceito. A busca usa o mesmo motor de “Por link”.', 'Pick a source to see the accepted link format. The search uses the same engine as “By link”.', 'Elige una fuente para ver el formato de enlace aceptado. La búsqueda usa el mismo motor que “Por enlace”.'],
+    ['Cole o link do vídeo ou da página', 'Paste the video or page link', 'Pega el enlace del vídeo o de la página'],
+    ['Link do vídeo ou da página', 'Video or page link', 'Enlace del vídeo o de la página'],
+    ['Limpar link', 'Clear link', 'Borrar enlace'],
+    ['Cole um link aqui', 'Paste a link here', 'Pega un enlace aquí'],
+    ['Link do site', 'Site link', 'Enlace del sitio'],
+    ['Fontes', 'Sources', 'Fuentes'],
+    ['Diagnosticar', 'Run diagnostics', 'Diagnosticar'],
+    ['Limpar e corrigir', 'Clean up and fix', 'Limpiar y corregir'],
+    ['Copiar relatório', 'Copy report', 'Copiar informe'],
+    ['Iniciando OPTDOWNS', 'Starting OPTDOWNS', 'Iniciando OPTDOWNS'],
+    ['Preparando…', 'Getting ready…', 'Preparando…'],
+    ['Processamento local', 'Local processing', 'Procesamiento local'],
+    ['Escolha a qualidade antes de baixar', 'Pick the quality before downloading', 'Elige la calidad antes de descargar'],
+    ['Instalação concluída', 'Installation complete', 'Instalación completada'],
+    ['Carregando o conversor de vídeo…', 'Loading the video converter…', 'Cargando el conversor de vídeo…'],
+    ['Procurando vídeos na página…', 'Looking for videos on the page…', 'Buscando vídeos en la página…'],
+    ['mux.js ausente: HLS indisponível', 'mux.js missing: HLS unavailable', 'mux.js ausente: HLS no disponible'],
+    ['Lista atualizada', 'List updated', 'Lista actualizada'],
+    ['Toque e segure no campo para colar.', 'Press and hold the field to paste.', 'Mantén pulsado el campo para pegar.'],
+    ['Cole um link público válido.', 'Paste a valid public link.', 'Pega un enlace público válido.'],
+    ['Nenhum vídeo encontrado ainda.', 'No videos found yet.', 'Aún no se encontró ningún vídeo.'],
+    ['Inicie a reprodução e toque em atualizar.', 'Start playback and tap refresh.', 'Inicia la reproducción y toca actualizar.'],
+    ['TikTok, Instagram, arquivos de vídeo, playlists HLS e páginas com vários vídeos. A disponibilidade depende da fonte.', 'TikTok, Instagram, video files, HLS playlists and pages with several videos. Availability depends on the source.', 'TikTok, Instagram, archivos de vídeo, listas HLS y páginas con varios vídeos. La disponibilidad depende de la fuente.'],
+    ['Link público de um vídeo', 'Public link to a video', 'Enlace público de un vídeo'],
+    ['Vídeos e Shorts · via seu Worker + Cobalt', 'Videos and Shorts · via your Worker + Cobalt', 'Vídeos y Shorts · mediante tu Worker + Cobalt'],
+    ['Endereço .m3u8 sem DRM', '.m3u8 address without DRM', 'Dirección .m3u8 sin DRM'],
+    ['Página com vídeos', 'Page with videos', 'Página con vídeos'],
+    ['Lista os vídeos em cards', 'Lists the videos as cards', 'Muestra los vídeos en tarjetas'],
+    ['Qualquer link', 'Any link', 'Cualquier enlace'],
+    ['Cole um link de vídeo ou de página', 'Paste a video or page link', 'Pega un enlace de vídeo o de página'],
+    ['Arquivo de vídeo', 'Video file', 'Archivo de vídeo'],
+    ['Playlist HLS', 'HLS playlist', 'Lista HLS'],
+    ['Limpar', 'Clear', 'Borrar'],
+    ['Melhor opção', 'Best option', 'Mejor opción'],
+    ['Baixar', 'Download', 'Descargar'],
+    ['Baixar MP3', 'Download MP3', 'Descargar MP3'],
+    ['Baixar imagem', 'Download image', 'Descargar imagen'],
+    ['Cancelar', 'Cancel', 'Cancelar'],
+    ['Preparando...', 'Preparing...', 'Preparando...'],
+    ['Extrair áudio em MP3', 'Extract audio as MP3', 'Extraer audio en MP3'],
+    ['Buscar vídeo', 'Find video', 'Buscar vídeo'],
+    ['Mostrar opções', 'Show options', 'Mostrar opciones'],
+    ['Ocultar opções', 'Hide options', 'Ocultar opciones'],
+    ['Tentar de novo', 'Try again', 'Intentar de nuevo'],
+    ['Abrir novamente', 'Open again', 'Abrir de nuevo'],
+    ['Abrir vídeo', 'Open video', 'Abrir vídeo'],
+    ['Salvar arquivo', 'Save file', 'Guardar archivo'],
+    ['Ver rastro técnico', 'Show technical trace', 'Ver rastro técnico'],
+    ['Ocultar rastro técnico', 'Hide technical trace', 'Ocultar rastro técnico'],
+    ['Abrir a página e usar “Nesta página”', 'Open the page and use “On this page”', 'Abrir la página y usar “En esta página”'],
+    ['Áudio', 'Audio', 'Audio'],
+    ['Vídeo', 'Video', 'Vídeo'],
+    ['VÍDEO', 'VIDEO', 'VÍDEO'],
+    ['PÁGINA', 'PAGE', 'PÁGINA'],
+    ['Música', 'Music', 'Música'],
+    ['Fonte de mídia', 'Media source', 'Fuente de medios'],
+    ['Som original do vídeo', 'Original video sound', 'Sonido original del vídeo'],
+    ['Todas as fotos em um arquivo', 'All photos in one file', 'Todas las fotos en un archivo'],
+    ['Vídeo do YouTube', 'YouTube video', 'Vídeo de YouTube'],
+    ['Somente áudio · MP3', 'Audio only · MP3', 'Solo audio · MP3'],
+    ['Vídeo · MP4', 'Video · MP4', 'Vídeo · MP4'],
+    ['Vídeo · outros formatos', 'Video · other formats', 'Vídeo · otros formatos'],
+    ['Somente áudio', 'Audio only', 'Solo audio'],
+    ['MP3 original · sem recompressão', 'Original MP3 · no re-encoding', 'MP3 original · sin recompresión'],
+    ['Áudio · será convertido em MP3', 'Audio · will be converted to MP3', 'Audio · se convertirá a MP3'],
+    ['Resolução não informada', 'Resolution not reported', 'Resolución no informada'],
+    ['Melhor qualidade disponível', 'Best available quality', 'Mejor calidad disponible'],
+    ['Automático · áudio publicado', 'Automatic · published audio', 'Automático · audio publicado'],
+    ['Trecho ao vivo disponível', 'Live window available', 'Fragmento en vivo disponible'],
+    ['Reprodução pública', 'Public playback', 'Reproducción pública'],
+    ['Player da página', 'Page player', 'Reproductor de la página'],
+    ['Vídeo publicado', 'Published video', 'Vídeo publicado'],
+    ['Página de vídeo', 'Video page', 'Página de vídeo'],
+    ['Lendo qualidades...', 'Reading qualities...', 'Leyendo calidades...'],
+    ['Abrindo a fonte no navegador...', 'Opening the source in the browser...', 'Abriendo la fuente en el navegador...'],
+    ['Preparando as fotos...', 'Preparing the photos...', 'Preparando las fotos...'],
+    ['Validando a fonte...', 'Validating the source...', 'Validando la fuente...'],
+    ['Montando arquivo...', 'Building the file...', 'Montando el archivo...'],
+    ['Validando o arquivo recebido...', 'Validating the received file...', 'Validando el archivo recibido...'],
+    ['Conferindo vídeo e áudio...', 'Checking video and audio...', 'Comprobando vídeo y audio...'],
+    ['Conferindo vídeo sem áudio...', 'Checking video without audio...', 'Comprobando vídeo sin audio...'],
+    ['Lendo as URLs atuais da playlist...', 'Reading the playlist’s current URLs...', 'Leyendo las URL actuales de la lista...'],
+    ['Lendo o áudio do arquivo...', 'Reading the file’s audio...', 'Leyendo el audio del archivo...'],
+    ['Salvando o MP3...', 'Saving the MP3...', 'Guardando el MP3...'],
+    ['Montando o arquivo ZIP...', 'Building the ZIP file...', 'Montando el archivo ZIP...'],
+    ['Baixando o áudio...', 'Downloading the audio...', 'Descargando el audio...'],
+    ['Salvando a imagem...', 'Saving the image...', 'Guardando la imagen...'],
+    ['Analisando o link público...', 'Analyzing the public link...', 'Analizando el enlace público...'],
+    ['Lendo a página e procurando vídeos...', 'Reading the page and looking for videos...', 'Leyendo la página y buscando vídeos...'],
+    ['Procurando o vídeo nesta página...', 'Looking for the video on this page...', 'Buscando el vídeo en esta página...'],
+    ['Atualizando a URL pública...', 'Refreshing the public URL...', 'Actualizando la URL pública...'],
+    ['Consultando título, miniatura e duração...', 'Fetching title, thumbnail and duration...', 'Consultando título, miniatura y duración...'],
+    ['Confirmando as qualidades realmente disponíveis...', 'Confirming which qualities are really available...', 'Confirmando las calidades realmente disponibles...'],
+    ['Baixando o arquivo pelo Worker...', 'Downloading the file through the Worker...', 'Descargando el archivo mediante el Worker...'],
+    ['Usando a sessão da página...', 'Using the page session...', 'Usando la sesión de la página...'],
+    ['Salvando', 'Saving', 'Guardando'],
+    ['Este item já está na fila', 'This item is already in the queue', 'Este elemento ya está en la cola'],
+    ['Já existe um download sendo preparado', 'A download is already being prepared', 'Ya se está preparando una descarga'],
+    ['Aguarde o download atual terminar para limpar.', 'Wait for the current download to finish before clearing.', 'Espera a que termine la descarga actual para borrar.'],
+    ['Aguarde a operação atual.', 'Wait for the current operation.', 'Espera a que termine la operación actual.'],
+    ['Cole apenas um link por vez.', 'Paste only one link at a time.', 'Pega solo un enlace a la vez.'],
+    ['Nenhum arquivo foi salvo.', 'No file was saved.', 'No se guardó ningún archivo.'],
+    ['Nenhuma mídia baixável foi encontrada.', 'No downloadable media was found.', 'No se encontró ningún medio descargable.'],
+    ['Nenhuma mídia baixável foi encontrada nesta página.', 'No downloadable media was found on this page.', 'No se encontró ningún medio descargable en esta página.'],
+    ['Não foi possível ler o link.', 'Could not read the link.', 'No se pudo leer el enlace.'],
+    ['Não foi possível ler esta página.', 'Could not read this page.', 'No se pudo leer esta página.'],
+    ['Não foi possível ler o vídeo deste link.', 'Could not read the video from this link.', 'No se pudo leer el vídeo de este enlace.'],
+    ['Não foi possível baixar esta fonte', 'This source could not be downloaded', 'No se pudo descargar esta fuente'],
+    ['Não foi possível baixar o arquivo', 'The file could not be downloaded', 'No se pudo descargar el archivo'],
+    ['Não foi possível abrir a fonte', 'Could not open the source', 'No se pudo abrir la fuente'],
+    ['Download concluído pelo navegador', 'Download finished by the browser', 'Descarga completada por el navegador'],
+    ['Solicitação enviada ao navegador', 'Request sent to the browser', 'Solicitud enviada al navegador'],
+    ['Solicitação enviada. Confira a pasta Downloads.', 'Request sent. Check your Downloads folder.', 'Solicitud enviada. Revisa la carpeta de Descargas.'],
+    ['Vídeo enviado sem alterar os dados', 'Video sent without changing the data', 'Vídeo enviado sin alterar los datos'],
+    ['Use o salvamento do navegador para concluir.', 'Use the browser’s save option to finish.', 'Usa el guardado del navegador para terminar.'],
+    ['Arquivo pronto. Toque em “Salvar arquivo”.', 'File ready. Tap “Save file”.', 'Archivo listo. Toca “Guardar archivo”.'],
+    ['Toque em “Salvar arquivo” para concluir', 'Tap “Save file” to finish', 'Toca “Guardar archivo” para terminar'],
+    ['Toque em “Abrir vídeo” para continuar', 'Tap “Open video” to continue', 'Toca “Abrir vídeo” para continuar'],
+    ['Falha ao preparar o vídeo', 'Failed to prepare the video', 'Error al preparar el vídeo'],
+    ['MP3 salvo (qualidade original da fonte)', 'MP3 saved (original source quality)', 'MP3 guardado (calidad original de la fuente)'],
+    ['Áudio já está em MP3 · mantendo a qualidade original', 'Audio is already MP3 · keeping the original quality', 'El audio ya está en MP3 · se mantiene la calidad original'],
+    ['Relatório copiado', 'Report copied', 'Informe copiado'],
+    ['Não consegui copiar; selecione o texto manualmente.', 'Could not copy; select the text manually.', 'No se pudo copiar; selecciona el texto manualmente.'],
+    ['O diagnóstico falhou', 'The diagnostics failed', 'El diagnóstico falló'],
+    ['Painel aberto. Aguardando o player; toque em Baixar quando o vídeo aparecer.', 'Panel open. Waiting for the player; tap Download when the video appears.', 'Panel abierto. Esperando al reproductor; toca Descargar cuando aparezca el vídeo.'],
+    ['Tamanho informado pela fonte:', 'Size reported by the source:', 'Tamaño informado por la fuente:'],
+    ['Qualidade confirmada pela sua instância Cobalt.', 'Quality confirmed by your Cobalt instance.', 'Calidad confirmada por tu instancia de Cobalt.'],
+    ['O Worker não devolveu nenhuma qualidade baixável para este vídeo.', 'The Worker returned no downloadable quality for this video.', 'El Worker no devolvió ninguna calidad descargable para este vídeo.'],
+    ['O YouTube precisa do Worker próprio: preencha LINK_PROXY no script (e LINK_PROXY_YOUTUBE = true).', 'YouTube needs your own Worker: fill in LINK_PROXY in the script (and LINK_PROXY_YOUTUBE = true).', 'YouTube necesita tu propio Worker: rellena LINK_PROXY en el script (y LINK_PROXY_YOUTUBE = true).'],
+    ['Não consegui falar com o seu Worker (rede ou CORS). Confira LINK_PROXY e se o Worker está publicado.', 'Could not reach your Worker (network or CORS). Check LINK_PROXY and that the Worker is deployed.', 'No pude conectar con tu Worker (red o CORS). Revisa LINK_PROXY y que el Worker esté publicado.'],
+    ['O seu Worker é uma versão antiga, sem suporte ao YouTube. Publique o worker.js atualizado.', 'Your Worker is an old version without YouTube support. Deploy the updated worker.js.', 'Tu Worker es una versión antigua, sin soporte para YouTube. Publica el worker.js actualizado.'],
+    ['O download direto foi recusado. Pedindo ao seu Worker para tentar este link...', 'The direct download was refused. Asking your Worker to try this link...', 'La descarga directa fue rechazada. Pidiendo a tu Worker que pruebe este enlace...'],
+    ['Este link é uma publicação de fotos, não um vídeo.', 'This link is a photo post, not a video.', 'Este enlace es una publicación de fotos, no un vídeo.'],
+    ['Aguarde o prazo indicado pela fonte e tente novamente.', 'Wait for the time the source indicates and try again.', 'Espera el plazo que indica la fuente e inténtalo de nuevo.'],
+    ['A fonte não entendeu o pedido', 'The source did not understand the request', 'La fuente no entendió la solicitud'],
+    ['A fonte exige autenticação', 'The source requires authentication', 'La fuente exige autenticación'],
+    ['A fonte recusou o acesso ou a URL expirou', 'The source refused access or the URL expired', 'La fuente rechazó el acceso o la URL caducó'],
+    ['O recurso não está mais disponível', 'The resource is no longer available', 'El recurso ya no está disponible'],
+    ['A fonte bloqueou o conteúdo por restrição legal ou regional', 'The source blocked the content for legal or regional reasons', 'La fuente bloqueó el contenido por restricción legal o regional'],
+    ['A fonte demorou demais para responder', 'The source took too long to respond', 'La fuente tardó demasiado en responder'],
+    ['A fonte limitou as requisições', 'The source rate-limited the requests', 'La fuente limitó las solicitudes'],
+    ['Erro interno no servidor da fonte', 'Internal error on the source server', 'Error interno en el servidor de la fuente'],
+    ['O servidor da fonte está indisponível ou sobrecarregado', 'The source server is unavailable or overloaded', 'El servidor de la fuente no está disponible o está sobrecargado'],
+    ['A fonte respondeu com erro', 'The source responded with an error', 'La fuente respondió con un error'],
+    ['Tempo esgotado ao ler a fonte.', 'Timed out reading the source.', 'Se agotó el tiempo al leer la fuente.'],
+    ['Falha de rede ao acessar a fonte.', 'Network failure while reaching the source.', 'Fallo de red al acceder a la fuente.'],
+    ['Tempo esgotado ao baixar o arquivo', 'Timed out downloading the file', 'Se agotó el tiempo al descargar el archivo'],
+    ['Requisição cancelada', 'Request cancelled', 'Solicitud cancelada'],
+    ['A fonte ficou sem responder', 'The source stopped responding', 'La fuente dejó de responder'],
+    ['O navegador exige um novo toque para salvar o arquivo', 'The browser needs another tap to save the file', 'El navegador exige otro toque para guardar el archivo'],
+    ['Esta fonte usa DRM ou uma criptografia não compatível. Nenhuma proteção será contornada.', 'This source uses DRM or an unsupported encryption. No protection will be bypassed.', 'Esta fuente usa DRM o un cifrado no compatible. No se evitará ninguna protección.'],
+    ['O script não concatena faixas DASH separadas nem contorna DRM.', 'The script does not merge separate DASH tracks or bypass DRM.', 'El script no une pistas DASH separadas ni evita el DRM.'],
+    ['Erros desta sessão', 'Errors in this session', 'Errores de esta sesión'],
+    ['Nenhum erro de download registrado.', 'No download errors recorded.', 'No se registró ningún error de descarga.'],
+    ['Erros e sugestões', 'Errors and suggestions', 'Errores y sugerencias'],
+    ['Esta página', 'This page', 'Esta página'],
+    ['Página:', 'Page:', 'Página:'],
+    ['Detalhe técnico:', 'Technical detail:', 'Detalle técnico:'],
+    ['O arquivo expirou ou foi removido.', 'The file expired or was removed.', 'El archivo caducó o fue eliminado.'],
+    ['Faça uma nova busca pelo link para obter uma URL nova.', 'Search the link again to get a new URL.', 'Vuelve a buscar el enlace para obtener una URL nueva.'],
+    ['Se continuar, o vídeo pode ter sido apagado.', 'If it keeps happening, the video may have been deleted.', 'Si continúa, es posible que el vídeo haya sido eliminado.'],
+    ['Copie o relatório e envie para análise.', 'Copy the report and send it for analysis.', 'Copia el informe y envíalo para su análisis.'],
+    ['A opção apontava para uma página HTML, não para vídeo.', 'The option pointed to an HTML page, not a video.', 'La opción apuntaba a una página HTML, no a un vídeo.'],
+    ['Cole o link da página em “Por link” para o script achar o vídeo.', 'Paste the page link in “By link” so the script can find the video.', 'Pega el enlace de la página en “Por enlace” para que el script encuentre el vídeo.'],
+    ['A fonte devolveu dados em vez de vídeo.', 'The source returned data instead of video.', 'La fuente devolvió datos en lugar de vídeo.'],
+    ['Cole o link da página do vídeo, não o de uma API.', 'Paste the video page link, not an API one.', 'Pega el enlace de la página del vídeo, no el de una API.'],
+    ['O Worker respondeu com erro.', 'The Worker responded with an error.', 'El Worker respondió con un error.'],
+    ['Use “Testar Worker” abaixo.', 'Use “Test Worker” below.', 'Usa “Probar Worker” abajo.'],
+    ['O navegador não permitiu salvar automaticamente.', 'The browser did not allow saving automatically.', 'El navegador no permitió guardar automáticamente.'],
+    ['Use o botão para abrir/salvar manualmente.', 'Use the button to open/save manually.', 'Usa el botón para abrir/guardar manualmente.'],
+    ['O servidor limitou as requisições.', 'The server rate-limited the requests.', 'El servidor limitó las solicitudes.'],
+    ['Tente novamente mais tarde.', 'Try again later.', 'Inténtalo de nuevo más tarde.'],
+    ['O endereço expirou ou não existe mais.', 'The address expired or no longer exists.', 'La dirección caducó o ya no existe.'],
+    ['Busque o link de novo para renovar o endereço.', 'Search the link again to renew the address.', 'Busca el enlace de nuevo para renovar la dirección.'],
+    ['Respeite os termos do site: o OPTDOWNS não contorna login nem proteção.', 'Respect the site’s terms: OPTDOWNS does not bypass logins or protections.', 'Respeta los términos del sitio: OPTDOWNS no evita inicios de sesión ni protecciones.'],
+    ['Entre no site e reproduza o vídeo, depois use “Nesta página”.', 'Sign in to the site and play the video, then use “On this page”.', 'Inicia sesión en el sitio y reproduce el vídeo, luego usa “En esta página”.'],
+    ['Falha sem causa específica registrada.', 'Failure with no specific cause recorded.', 'Fallo sin causa específica registrada.'],
+    ['LINK_PROXY está vazio: o fallback por servidor está desligado.', 'LINK_PROXY is empty: the server fallback is off.', 'LINK_PROXY está vacío: la alternativa por servidor está desactivada.'],
+    ['O Worker está no ar, mas exige a chave.', 'The Worker is up, but it requires the key.', 'El Worker está activo, pero exige la clave.'],
+    ['Não foi possível falar com o Worker (rede ou CORS).', 'Could not reach the Worker (network or CORS).', 'No se pudo conectar con el Worker (red o CORS).'],
+    ['Confira a URL em LINK_PROXY e se o Worker está publicado.', 'Check the URL in LINK_PROXY and that the Worker is deployed.', 'Revisa la URL en LINK_PROXY y que el Worker esté publicado.'],
+    ['GM_xmlhttpRequest disponível: downloads entre sites funcionam.', 'GM_xmlhttpRequest available: cross-site downloads work.', 'GM_xmlhttpRequest disponible: las descargas entre sitios funcionan.'],
+    ['GM_xmlhttpRequest ausente: só há acesso às origens que a página permite (CORS).', 'GM_xmlhttpRequest missing: only origins the page allows (CORS) are reachable.', 'GM_xmlhttpRequest ausente: solo se accede a los orígenes que la página permite (CORS).'],
+    ['Instale pelo Tampermonkey/Userscripts e permita a conexão com todos os domínios (@connect *).', 'Install it through Tampermonkey/Userscripts and allow connections to all domains (@connect *).', 'Instálalo con Tampermonkey/Userscripts y permite la conexión con todos los dominios (@connect *).'],
+    ['mux.js não carregou: downloads HLS não podem ser convertidos.', 'mux.js did not load: HLS downloads cannot be converted.', 'mux.js no cargó: las descargas HLS no se pueden convertir.'],
+    ['Reinstale o script com internet ligada e confirme que unpkg.com não está bloqueado.', 'Reinstall the script while online and make sure unpkg.com is not blocked.', 'Reinstala el script con internet y confirma que unpkg.com no esté bloqueado.'],
+    ['GM_download disponível.', 'GM_download available.', 'GM_download disponible.'],
+    ['Recentes e preferências podem ser salvos.', 'Recent links and preferences can be saved.', 'Los recientes y las preferencias se pueden guardar.'],
+    ['Safari/iOS: o arquivo vai para Downloads/Compartilhar.', 'Safari/iOS: the file goes to Downloads/Share.', 'Safari/iOS: el archivo va a Descargas/Compartir.'],
+    ['Opcional. Ative para baixar vídeos e Shorts pelo seu Worker + Cobalt.', 'Optional. Turn on to download videos and Shorts through your Worker + Cobalt.', 'Opcional. Actívalo para descargar vídeos y Shorts con tu Worker + Cobalt.'],
+    ['Link direto .mp4, .webm, .mov', 'Direct .mp4, .webm, .mov link', 'Enlace directo .mp4, .webm, .mov'],
+    ['O script identifica o tipo', 'The script detects the type', 'El script identifica el tipo'],
+    ['Recentes', 'Recent', 'Recientes'],
+    ['A fonte não publicou uma versão sem marca d’água; se houver marca incorporada ao vídeo, ela permanece no arquivo.', 'The source did not publish a watermark-free version; if the video has a built-in watermark, it stays in the file.', 'La fuente no publicó una versión sin marca de agua; si el vídeo tiene una marca incorporada, permanece en el archivo.'],
+    ['Verifica o OPTDOWNS neste dispositivo (gerenciador, conversor HLS, Worker) e explica os erros recentes com sugestões. Ele não altera outros scripts nem contorna login ou proteção dos sites.', 'Checks OPTDOWNS on this device (manager, HLS converter, Worker) and explains recent errors with suggestions. It does not change other scripts or bypass site logins or protections.', 'Comprueba OPTDOWNS en este dispositivo (gestor, conversor HLS, Worker) y explica los errores recientes con sugerencias. No modifica otros scripts ni evita los inicios de sesión o las protecciones de los sitios.'],
+    ['Consultando o vídeo de novo...', 'Checking the video again...', 'Consultando el vídeo de nuevo...'],
+    ['O Worker respondeu para outro vídeo (ID divergente). Nada foi exibido, para não baixar o vídeo errado.', 'The Worker answered for another video (ID mismatch). Nothing was shown, so the wrong video is not downloaded.', 'El Worker respondió para otro vídeo (ID distinto). No se mostró nada, para no descargar el vídeo equivocado.'],
+    ['Não foi possível consultar este vídeo.', 'Could not check this video.', 'No se pudo consultar este vídeo.'],
+    ['O YouTube está desligado neste script (LINK_PROXY vazio ou LINK_PROXY_YOUTUBE = false).', 'YouTube is turned off in this script (LINK_PROXY is empty or LINK_PROXY_YOUTUBE = false).', 'YouTube está desactivado en este script (LINK_PROXY vacío o LINK_PROXY_YOUTUBE = false).'],
+    ['YouTube · vídeo não identificado', 'YouTube · video not identified', 'YouTube · vídeo no identificado'],
+    ['YouTube · erro', 'YouTube · error', 'YouTube · error'],
+    ['Preparando a consulta...', 'Preparing the lookup...', 'Preparando la consulta...'],
+    ['O seu Worker é uma versão antiga, sem suporte ao Instagram. Publique o worker.js atualizado.', 'Your Worker is an old version without Instagram support. Deploy the updated worker.js.', 'Tu Worker es una versión antigua, sin soporte para Instagram. Publica el worker.js actualizado.'],
+    ['O Worker não devolveu nenhum arquivo do Instagram para este link.', 'The Worker returned no Instagram file for this link.', 'El Worker no devolvió ningún archivo de Instagram para este enlace.'],
+    ['O Worker não conseguiu preparar o YouTube.', 'The Worker could not prepare YouTube.', 'El Worker no pudo preparar YouTube.'],
+    ['Reels e posts · via seu Worker + Cobalt', 'Reels and posts · via your Worker + Cobalt', 'Reels y publicaciones · mediante tu Worker + Cobalt'],
+  ];
+  const I18N = { lang: 'pt', maps: { en: new Map(), es: new Map() }, lower: { en: new Map(), es: new Map() }, orig: new WeakMap(), attrs: new WeakMap() };
+  for (const [pt, en, es] of I18N_ROWS) {
+    I18N.maps.en.set(pt, en); I18N.maps.es.set(pt, es);
+    I18N.lower.en.set(pt.toLowerCase(), en); I18N.lower.es.set(pt.toLowerCase(), es);
+  }
+  const I18N_ATTRS = ['aria-label', 'placeholder', 'title'];
+  const i18nPlural = n => Number(n) === 1;
+  // Patterns for text with numbers or parts that change. Each returns the translation or undefined.
+  const I18N_RULES = [
+    [/^(\d+) vídeos?( encontrados?| na página| · (\d+) fontes)$/, (m, l) => {
+      const n = m[1], s = i18nPlural(n) ? '' : 's', tail = m[2];
+      if (tail.startsWith(' encontrad')) return l === 'en' ? `${n} video${s} found` : `${n} vídeo${s} encontrado${s}`;
+      if (tail === ' na página') return l === 'en' ? `${n} video${s} on the page` : `${n} vídeo${s} en la página`;
+      return l === 'en' ? `${n} video${s} · ${m[3]} sources` : `${n} vídeo${s} · ${m[3]} fuentes`;
+    }],
+    [/^(\d+) opç(?:ão|ões) encontradas?$/, (m, l) => { const one = i18nPlural(m[1]); return l === 'en' ? `${m[1]} option${one ? '' : 's'} found` : `${m[1]} opci${one ? 'ón encontrada' : 'ones encontradas'}`; }],
+    [/^Na fila · posição (\d+) de (\d+)$/, (m, l) => l === 'en' ? `Queued · position ${m[1]} of ${m[2]}` : `En cola · posición ${m[1]} de ${m[2]}`],
+    [/^Adicionado à fila · posição (\d+)$/, (m, l) => l === 'en' ? `Added to the queue · position ${m[1]}` : `Añadido a la cola · posición ${m[1]}`],
+    [/^Recebidos ([\d.]+) MB(?: de ([\d.]+) MB| · tamanho total não informado)?$/, (m, l) => {
+      if (m[2]) return l === 'en' ? `Received ${m[1]} MB of ${m[2]} MB` : `Recibidos ${m[1]} MB de ${m[2]} MB`;
+      if (m[0].includes('·')) return l === 'en' ? `Received ${m[1]} MB · total size not reported` : `Recibidos ${m[1]} MB · tamaño total no informado`;
+      return l === 'en' ? `Received ${m[1]} MB` : `Recibidos ${m[1]} MB`;
+    }],
+    [/^(\d+)\/(\d+) segmentos(.*)$/, (m, l) => {
+      const rest = m[3].replace(' recebidos', l === 'en' ? ' received' : ' recibidos').replace(': ', ': ').replace(/Mídia/, l === 'en' ? 'Media' : 'Medios');
+      return `${m[1]}/${m[2]} ${l === 'en' ? 'segments' : 'segmentos'}${rest}`;
+    }],
+    [/^Baixando foto (\d+) de (\d+)\.\.\.$/, (m, l) => l === 'en' ? `Downloading photo ${m[1]} of ${m[2]}...` : `Descargando foto ${m[1]} de ${m[2]}...`],
+    [/^Convertendo em MP3 · (\d+) kbps$/, (m, l) => l === 'en' ? `Converting to MP3 · ${m[1]} kbps` : `Convirtiendo a MP3 · ${m[1]} kbps`],
+    [/^Baixar as (\d+) fotos · ZIP$/, (m, l) => l === 'en' ? `Download all ${m[1]} photos · ZIP` : `Descargar las ${m[1]} fotos · ZIP`],
+    [/^Baixar imagem em HD$/, (m, l) => l === 'en' ? 'Download image in HD' : 'Descargar imagen en HD'],
+    [/^Todas as (\d+) fotos · (.*)$/, (m, l) => l === 'en' ? `All ${m[1]} photos · ${m[2]}` : `Todas las ${m[1]} fotos · ${m[2]}`],
+    [/^Verificando os segmentos \((\d+)\/(\d+)\)\.\.\.$/, (m, l) => l === 'en' ? `Checking segments (${m[1]}/${m[2]})...` : `Comprobando segmentos (${m[1]}/${m[2]})...`],
+    [/^(\d+) qualidades publicadas · vídeo e áudio copiados sem recompressão e conferidos antes de salvar( · playlist principal recuperada)?$/, (m, l) => {
+      const base = l === 'en' ? `${m[1]} published qualities · video and audio copied without re-encoding and checked before saving` : `${m[1]} calidades publicadas · vídeo y audio copiados sin recompresión y comprobados antes de guardar`;
+      return m[2] ? base + (l === 'en' ? ' · main playlist recovered' : ' · lista principal recuperada') : base;
+    }],
+    [/^(.+?) encontrados?\. Escolha a qualidade e baixe\.(.*)$/, (m, l) => {
+      const parts = i18nParts(m[1], l); if (!parts) return undefined;
+      const note = m[2].trim() ? ' ' + i18nText(m[2].trim(), l) : '';
+      return (l === 'en' ? `${parts} found. Pick the quality and download.` : `${parts} encontrado${/[a-z]s\b/.test(parts) ? 's' : ''}. Elige la calidad y descarga.`) + note;
+    }],
+    [/^(.*?): (.*)\. A disponibilidade depende da fonte\.$/, (m, l) => {
+      const hint = I18N.lower[l].get(m[2]); if (hint === undefined) return undefined;
+      return `${i18nText(m[1], l)}: ${hint}. ${l === 'en' ? 'Availability depends on the source.' : 'La disponibilidad depende de la fuente.'}`;
+    }],
+    [/^Baixar (.+)$/, (m, l) => `${l === 'en' ? 'Download' : 'Descargar'} ${m[1].replace(/\bvídeo\b/g, l === 'en' ? 'video' : 'vídeo').replace(/\báudio\b/g, 'audio')}`],
+  ];
+  // Counts such as "2 vídeos · 1 foto · áudio MP3" are translated piece by piece.
+  function i18nParts(text, lang) {
+    const out = [];
+    for (const part of text.split(' · ')) {
+      let r;
+      if ((r = /^(\d+) vídeo$/.exec(part))) out.push(lang === 'en' ? `${r[1]} video` : `${r[1]} vídeo`);
+      else if ((r = /^(\d+) opções de vídeo$/.exec(part))) out.push(lang === 'en' ? `${r[1]} video options` : `${r[1]} opciones de vídeo`);
+      else if ((r = /^(\d+) fotos?$/.exec(part))) out.push(lang === 'en' ? `${r[1]} photo${i18nPlural(r[1]) ? '' : 's'}` : `${r[1]} foto${i18nPlural(r[1]) ? '' : 's'}`);
+      else if (part === 'áudio MP3') out.push(lang === 'en' ? 'MP3 audio' : 'audio MP3');
+      else if (part === 'vídeo do YouTube') out.push(lang === 'en' ? 'YouTube video' : 'vídeo de YouTube');
+      else if ((r = /^(\d+) vídeos do YouTube$/.exec(part))) out.push(lang === 'en' ? `${r[1]} YouTube videos` : `${r[1]} vídeos de YouTube`);
+      else if ((r = /^(\d+) opç(?:ão|ões) confirmadas?$/.exec(part))) out.push(lang === 'en' ? `${r[1]} confirmed option${i18nPlural(r[1]) ? '' : 's'}` : `${r[1]} opci${i18nPlural(r[1]) ? 'ón confirmada' : 'ones confirmadas'}`);
+      else if ((r = /^(\d+) opç(?:ão|ões)$/.exec(part))) out.push(lang === 'en' ? `${r[1]} option${i18nPlural(r[1]) ? '' : 's'}` : `${r[1]} opci${i18nPlural(r[1]) ? 'ón' : 'ones'}`);
+      else return null;
+    }
+    return out.join(' · ');
+  }
+  function i18nText(pt, lang) {
+    if (lang === 'pt' || !pt) return pt;
+    const m = /^(\s*)([\s\S]*?)(\s*)$/.exec(pt), core = m[2];
+    if (!core) return pt;
+    let out = I18N.maps[lang].get(core);
+    if (out === undefined) for (const [re, fn] of I18N_RULES) { const r = re.exec(core); if (r) { out = fn(r, lang); if (out !== undefined) break; } }
+    return out === undefined ? pt : m[1] + out + m[3];
+  }
+  // Text nodes and attributes remember their Portuguese original so the language can be switched back and forth.
+  function i18nNode(node, lang) {
+    const rec = I18N.orig.get(node), cur = node.nodeValue;
+    const src = rec && cur === rec.out ? rec.pt : cur;
+    const out = i18nText(src, lang);
+    if (out !== src) { I18N.orig.set(node, { pt: src, out }); if (cur !== out) node.nodeValue = out; }
+    else { I18N.orig.delete(node); if (cur !== src) node.nodeValue = src; }
+  }
+  function i18nAttrs(el, lang) {
+    let rec = I18N.attrs.get(el);
+    for (const attr of I18N_ATTRS) {
+      if (!el.hasAttribute(attr)) continue;
+      const cur = el.getAttribute(attr), r = rec && rec[attr];
+      const src = r && cur === r.out ? r.pt : cur;
+      const out = i18nText(src, lang);
+      if (out !== src) { rec = rec || {}; rec[attr] = { pt: src, out }; I18N.attrs.set(el, rec); if (cur !== out) el.setAttribute(attr, out); }
+      else { if (r) delete rec[attr]; if (cur !== src) el.setAttribute(attr, src); }
+    }
+  }
+  function i18nWalk(root, lang) {
+    if (root.nodeType === 3) { i18nNode(root, lang); return; }
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) i18nNode(n, lang);
+    if (root.nodeType === 1) i18nAttrs(root, lang);
+    for (const el of root.querySelectorAll('[aria-label],[placeholder],[title]')) i18nAttrs(el, lang);
+  }
+  function initialLanguage() {
+    const saved = PREFS.get('lang');
+    if (LANGS.some(l => l.id === saved)) return saved;
+    const nav = String((navigator.languages && navigator.languages[0]) || navigator.language || 'pt').toLowerCase();
+    return nav.startsWith('pt') ? 'pt' : nav.startsWith('es') ? 'es' : 'en';
+  }
+  function syncLangButtons() {
+    for (const button of document.querySelectorAll('#vdd-root .vdd-lang')) button.setAttribute('aria-pressed', String(button.dataset.lang === I18N.lang));
+  }
+  function setLanguage(lang, save = true) {
+    if (!LANGS.some(l => l.id === lang)) lang = 'pt';
+    I18N.lang = lang;
+    if (save) PREFS.set('lang', lang);
+    const root = document.getElementById('vdd-root');
+    if (root) i18nWalk(root, lang);
+    syncLangButtons();
+  }
+  function installI18n(root) {
+    I18N.lang = initialLanguage();
+    root.querySelector('.vdd-langs')?.addEventListener('click', event => {
+      const button = event.target.closest('.vdd-lang');
+      if (button) setLanguage(button.dataset.lang);
+    });
+    new MutationObserver(records => {
+      if (I18N.lang === 'pt') return;
+      for (const record of records) {
+        if (record.type === 'childList') for (const node of record.addedNodes) i18nWalk(node, I18N.lang);
+        else if (record.type === 'characterData') i18nNode(record.target, I18N.lang);
+        else if (record.type === 'attributes') i18nAttrs(record.target, I18N.lang);
+      }
+    }).observe(root, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: I18N_ATTRS });
+    setLanguage(I18N.lang, false);
+  }
+
+  // ---------------------------------------------------------------------------
   // Panel UI
   // Builds the floating button, the panel, its tabs and toasts.
   // ---------------------------------------------------------------------------
@@ -1156,11 +1538,12 @@
           <p>Preparando…</p>
           <div class="vdd-boot-bar"><i></i></div>
         </div>
-        <div class="vdd-footer">Processamento local <span>•</span> Escolha a qualidade antes de baixar</div>
+        <div class="vdd-footer"><div class="vdd-footer-text">Processamento local <span>•</span> Escolha a qualidade antes de baixar</div><div class="vdd-langs" role="group" aria-label="Language">${LANGS.map(l => `<button type="button" class="vdd-lang" data-lang="${l.id}" aria-label="${l.label}" title="${l.label}" aria-pressed="false">${l.flag}</button>`).join('')}</div></div>
       </section>
       <div id="vdd-toast" role="status"></div>
     `;
     document.documentElement.appendChild(root);
+    installI18n(root);
     new MutationObserver(() => { syncPageLock(); syncPanelClosing(); }).observe(document.getElementById('vdd-panel'), { attributes: true, attributeFilter: ['class'] });
     layoutPanel();
     let layoutFrame = 0;
@@ -1209,7 +1592,7 @@
       refreshButton.classList.remove('vdd-spinning'); void refreshButton.offsetWidth; refreshButton.classList.add('vdd-spinning');
       setTimeout(() => refreshButton.classList.remove('vdd-spinning'), 900);
       scanAll();
-      toast('Lista atualizada');
+      toast(refreshYouTubePage() ? 'Consultando o vídeo de novo...' : 'Lista atualizada');
     });
 
     document.getElementById('vdd-link-cancel').addEventListener('click', () => APP.linkController?.abort());
@@ -1789,7 +2172,7 @@
     if (!isUsableDirectUrl(full)) return false;
     if (!isHls(full, type) && APP.hlsResources.has(mediaIdentityKey(full, 'DIRECT'))) return false;
     if (responseLooksLikeHtml(type)) return false;
-    if (isHttp(full) && (restrictedPlatformNotice(full) || restrictedPlatformNotice(location.href))) return false;
+    if (restrictedPlatformNotice(location.href) || (isHttp(full) && restrictedPlatformNotice(full))) return false;
 
     if (/\/(?:blank|empty|transparent|spacer)\.(?:mp4|webm)(?:$|[?#])/i.test(full)) return false;
 
@@ -1883,6 +2266,7 @@
   }
 
   function onNavigated() {
+    resetYouTubePage();
     APP.navGen++; APP.navAt = performance.now(); APP.perfSeen = 0;
     APP.dropped.clear(); APP.activeVideoKey = ''; APP.expandedGroups.clear();
     collectFromDom();
@@ -2015,6 +2399,8 @@
     if (SCROLL_HOLD.active) { SCROLL_HOLD.pending = true; return; }
     const list = document.getElementById('vdd-list');
     if (!list) return;
+    const ytDet = detectYouTubePage();
+    if (ytDet) { if (APP.activeTab === 'page') paintYouTubePage(list, ytDet); return; }
     const items = pageMediaItems();
     if (APP.activeTab === 'page') {
       const videos = new Set(items.map(item => item.groupKey)).size;
@@ -2899,6 +3285,40 @@
   }
   const youtubeEnabled = () => LINK_PROXY_YOUTUBE && Boolean(String(LINK_PROXY || '').trim());
 
+  const YT_FINAL_CODE = /^(?:YT_(?:LOGIN_REQUIRED|LIVE|TOO_LONG|UNSUPPORTED|REGION|AUDIO_ONLY|NOT_CONFIGURED)|IG_(?:PRIVATE|LOGIN_REQUIRED|UNAVAILABLE|NO_MEDIA|UNSUPPORTED|WRONG_TYPE|ITEM_CHANGED|STORY)|VIDEO_(?:PRIVATE|UNAVAILABLE|NOT_FOUND)|BAD_TOKEN|TOO_LARGE|COBALT_KEY_INVALID|COBALT_AUTH|NOT_CONFIGURED)$/;
+  // Attaches the Worker's error code and Retry-After to an error.
+  async function attachWorkerError(response, err) {
+    const header = Number(response.headers.get('retry-after'));
+    if (Number.isFinite(header) && header > 0) err.retryAfterMs = Math.min(header * 1000, 60000);
+    if (!/json/i.test(response.headers.get('content-type') || '')) return;
+    try {
+      const body = await response.clone().json();
+      if (!body || typeof body !== 'object') return;
+      err.workerCode = String(body.code || '');
+      if (body.error) err.message = `${body.error}${body.hint ? ` ${body.hint}` : ''}`;
+      if (YT_FINAL_CODE.test(err.workerCode)) err.proxyFinal = true;
+    } catch {}
+  }
+  // Waits out 429 and 503 from the Worker before a download starts.
+  async function proxyPreflightRetry(url, signal) {
+    const probe = url + (url.includes('?') ? '&' : '?') + 'probe=1';
+    for (let attempt = 0; ; attempt++) {
+      try { return await proxyPreflight(probe, signal); }
+      catch (error) {
+        const transient = !error?.proxyFinal && [429, 502, 503, 504].includes(Number(error?.status));
+        if (!transient || attempt >= 2) throw error;
+        await new Promise(resolve => setTimeout(resolve, Math.min(Math.max(Number(error.retryAfterMs) || 0, 2000 * 2 ** attempt), 20000)));
+        if (signal?.aborted) throw mediaError('Download cancelado.', 'MEDIA_CANCELLED');
+      }
+    }
+  }
+
+  const YT_RESULT_TTL_MS = 45000;
+  // Short-lived cache shared by "By link" and "On this page" for the same video.
+  const YT_RESULT_CACHE = new Map();
+  // Turns Shorts, youtu.be, embed and live links into a normal watch URL.
+  const youtubeCanonicalUrl = id => `https://www.youtube.com/watch?v=${id}`;
+
   function isPrivateNetworkUrl(url) {
     try {
       const parsed = new URL(url);
@@ -3272,7 +3692,23 @@
   async function resolveSocialLink(url, context = {}) {
     const initial = publicPlatform(url), visited = new Set();
     if (initial.story) throw mediaError('Stories do Instagram exigem login e não são públicos. Abra o story no navegador, reproduza e use “Nesta página”.', 'MEDIA_LOGIN');
-    let expected = initial, firstError = null, login = false, pagesRead = 0;
+    let expected = initial, firstError = null, login = false, pagesRead = 0, workerIssue = null;
+    if (initial.kind === 'instagram' && instagramEnabled() && !context.skipIgWorker && LINK_PROXY_INSTAGRAM_ORDER === 'local-first') {
+      try { return await resolveSocialLink(url, { ...context, skipIgWorker: true }); }
+      catch (localError) {
+        if (localError?.code === 'MEDIA_CANCELLED') throw localError;
+        try { const viaWorker = await workerInstagramCandidates(url, context.signal, context.onStage, Boolean(context.fresh)); if (viaWorker.length) return viaWorker; }
+        catch (workerError) { if (workerError.proxyFinal || workerError.code === 'MEDIA_CANCELLED') throw workerError; localError.message += ` (Worker + Cobalt: ${workerError.message})`; }
+        throw localError;
+      }
+    }
+    if (initial.kind === 'instagram' && instagramEnabled() && !context.skipIgWorker) {
+      const metaPromise = instagramPublicMeta(url, context);
+      try {
+        const viaWorker = await workerInstagramCandidates(url, context.signal, context.onStage, Boolean(context.fresh));
+        if (viaWorker.length) return applyInstagramMeta(viaWorker, await Promise.race([metaPromise, new Promise(resolve => setTimeout(() => resolve(null), 1500))]));
+      } catch (error) { if (error.proxyFinal || error.code === 'MEDIA_CANCELLED') throw error; workerIssue = error; }
+    }
     const queue = [url];
     const all = [];
     while (queue.length && visited.size < 3) {
@@ -3316,6 +3752,7 @@
       ? ` Motivo: ${firstError.status === 404 || firstError.status === 410 ? 'o vídeo não existe mais ou o link é privado' : `a plataforma bloqueou a leitura automática (HTTP ${firstError.status})`}.` : '';
     const error = mediaError(login ? `${initial.name} exigiu login e não publicou uma mídia acessível nesse link.` :
       `${initial.name} não disponibilizou uma mídia legível (vídeo, foto ou áudio) nesta consulta.${reason} Abra o post no navegador, reproduza e use “Nesta página”.`, 'MEDIA_PUBLIC_UNAVAILABLE', firstError?.status || 0);
+    if (workerIssue) error.message += ` (Worker + Cobalt: ${workerIssue.message})`;
     error.cause = firstError; throw error;
   }
 
@@ -3388,7 +3825,8 @@
   // Downloads resolved social items straight from the browser.
   // ---------------------------------------------------------------------------
   async function downloadPublicItemDirect(item, title, options) {
-    if (item.via === 'worker') return downloadDirectSmart(item.url, title, { ...options, retryAttempts: 2, allowPageFallback: false, typeHint: item.type || 'video/mp4', kindHint: item.kind || 'MP4' });
+    if (item.via === 'worker' && (item.platform === 'youtube' || item.platform === 'instagram')) await proxyPreflightRetry(item.url, options.signal);
+    if (item.via === 'worker') { const single = item.platform === 'youtube' || item.platform === 'instagram'; return downloadDirectSmart(item.url, title, { ...options, retryAttempts: single ? 3 : 2, allowPageFallback: false, singleStream: single, typeHint: item.type || 'video/mp4', kindHint: item.kind || 'MP4' }); }
     let current = item;
     if (!item.platform && needsClassification(item)) {
       const found = await classifyMediaUrl(item.url, { referrer: item.pageUrl || item.url, publicOnly: true, sessionLink: true, signal: options.signal });
@@ -3570,9 +4008,13 @@
     return option.sizeKind === 'estimated' ? `≈ ${text} (estimado pela fonte)` : text;
   }
 
-  async function workerYouTubeCandidates(pageUrl, signal, onStage) {
+  async function workerYouTubeCandidates(pageUrl, signal, onStage, fresh = false) {
     const base = workerBase(), parsed = youtubeLink(pageUrl);
     if (!youtubeEnabled() || !parsed) throw mediaError('O YouTube precisa do Worker próprio: preencha LINK_PROXY no script (e LINK_PROXY_YOUTUBE = true).', 'YT_NO_WORKER');
+    pageUrl = youtubeCanonicalUrl(parsed.id);
+    const cacheKey = `${parsed.id}|${LINK_PROXY_YOUTUBE_SIZES ? 1 : 0}`, cached = YT_RESULT_CACHE.get(cacheKey);
+    const withShort = list => (parsed.short ? list.map(item => (item.mediaType === 'youtube' ? { ...item, isShort: true } : item)) : list);
+    if (!fresh && cached && Date.now() - cached.t < YT_RESULT_TTL_MS) return withShort(cached.candidates);
     onStage?.('Consultando título, miniatura e duração...');
     const key = LINK_PROXY_KEY ? `&key=${encodeURIComponent(LINK_PROXY_KEY)}` : '';
     const url = `${base}/yt/info?url=${encodeURIComponent(pageUrl)}${LINK_PROXY_YOUTUBE_SIZES ? '&sizes=1' : ''}${key}`;
@@ -3607,8 +4049,13 @@
         codec: String(o.codec || ''), qualityLabel: o.quality ? `${o.quality}p` : `até ${o.requestedQuality}p`, qualityConfirmed: Boolean(o.quality), label: String(o.label || ''), score: 100 + Number(o.quality || 0) });
     }
     if (!options.length) throw mediaError('O Worker não devolveu nenhuma qualidade baixável para este vídeo.', 'YT_NO_OPTIONS');
-    return [{ ...common, kind: 'YOUTUBE', mediaType: 'youtube', url: `https://www.youtube.com/watch?v=${parsed.id}#optdowns-yt`, title, author, thumbnail, duration, isShort: body.kind === 'short',
+    const candidates = [{ ...common, kind: 'YOUTUBE', mediaType: 'youtube', url: `https://www.youtube.com/watch?v=${parsed.id}#optdowns-yt`, title, author, thumbnail, duration, isShort: body.kind === 'short',
       options, warnings: (Array.isArray(body.warnings) ? body.warnings : []).slice(0, 4).map(w => cleanDisplayText(String(w), 220)), sourceKey: `${common.postId}:yt` }];
+    if (!body.partial) {
+      YT_RESULT_CACHE.set(cacheKey, { t: Date.now(), candidates });
+      while (YT_RESULT_CACHE.size > 8) YT_RESULT_CACHE.delete(YT_RESULT_CACHE.keys().next().value);
+    }
+    return withShort(candidates);
   }
 
   // Asks the Worker for confirmed YouTube options: title, thumbnail and qualities.
@@ -3621,7 +4068,7 @@
       skeleton.innerHTML = '<div class="vdd-yt-skel-thumb"></div><div class="vdd-yt-skel-lines"><i></i><i></i><i></i></div>';
       results.replaceChildren(skeleton); delete results.dataset.signature;
     }
-    try { return await workerYouTubeCandidates(url, context.signal, context.onStage); }
+    try { return await workerYouTubeCandidates(url, context.signal, context.onStage, Boolean(context.fresh)); }
     finally { if (skeleton?.isConnected) skeleton.remove(); }
   }
 
@@ -3634,6 +4081,8 @@
     const videos = options.filter(option => !option.mediaType), audios = options.filter(option => option.mediaType === 'audio');
     const mp4 = videos.filter(option => option.kind === 'MP4'), other = videos.filter(option => option.kind !== 'MP4');
     const first = mp4[0] || videos[0] || audios[0];
+    sourceScope = 'link';
+    card.dataset.ytId = item.postId || '';
     const live = { ...first, sourceScope };
     const duration = formatDuration(item.duration);
     const optionText = option => [option.mediaType === 'audio' ? 'Somente áudio · MP3' : option.label || option.qualityLabel, ytSizeText(option)].filter(Boolean).join(' · ');
@@ -3690,6 +4139,170 @@
     attachDownloadHandler(card, live, () => live.fileBase || title);
     new MutationObserver(() => { select.disabled = ['running', 'queued'].includes(card.dataset.dl || ''); }).observe(card, { attributes: true, attributeFilter: ['data-dl'] });
     return card;
+  }
+
+  // ---------------------------------------------------------------------------
+  // YouTube on this page
+  // Identifies the open video from its URL and uses the same Worker flow as "By link".
+  // ---------------------------------------------------------------------------
+  const YT_PAGE_SETTLE_MS = 700;
+
+  function youtubeIdFromDom() {
+    const values = [document.querySelector('link[rel="canonical"]')?.href, document.querySelector('meta[property="og:url"]')?.content,
+      document.querySelector('meta[itemprop="videoId"]')?.content, document.querySelector('ytd-watch-flexy')?.getAttribute('video-id')];
+    for (const value of values) {
+      if (!value) continue;
+      const parsed = youtubeLink(value) || (/^[\w-]{11}$/.test(value) ? { id: value, short: false } : null);
+      if (parsed) return parsed;
+    }
+    return null;
+  }
+  function detectYouTubePage() {
+    if (!YT_LINK_HOST.test(location.hostname)) return null;
+    const fromUrl = youtubeLink(location.href);
+    if (fromUrl) return { state: 'video', id: fromUrl.id, short: fromUrl.short, url: youtubeCanonicalUrl(fromUrl.id), source: 'url' };
+    if (!/^\/(?:watch|shorts|live|embed)(?:\/|$)/.test(location.pathname)) return { state: 'notvideo' };
+    const fromDom = youtubeIdFromDom();
+    return fromDom ? { state: 'video', id: fromDom.id, short: fromDom.short, url: youtubeCanonicalUrl(fromDom.id), source: 'dom' } : { state: 'unidentified' };
+  }
+
+  function resetYouTubePage() {
+    const s = APP.ytPage; if (!s) return;
+    clearTimeout(s.timer); try { s.controller?.abort(); } catch {}
+    APP.ytPage = null;
+  }
+  function ytPageState(det) {
+    let s = APP.ytPage;
+    if (s && s.id !== det.id) { resetYouTubePage(); s = null; }
+    if (!s) s = APP.ytPage = { id: det.id, url: det.url, status: 'idle', items: [], error: '', stage: '', controller: null, timer: 0 };
+    if (s.status === 'idle' && !s.timer) {
+      s.status = 'settling';
+      s.timer = setTimeout(() => {
+        s.timer = 0; if (APP.ytPage !== s || s.status !== 'settling') return;
+        if (!APP.panelOpen || APP.activeTab !== 'page') { s.status = 'idle'; return; }
+        startYouTubePageQuery(s, false);
+      }, YT_PAGE_SETTLE_MS);
+    }
+    return s;
+  }
+  async function startYouTubePageQuery(s, fresh) {
+    if (s.status === 'loading') return;
+    clearTimeout(s.timer); s.timer = 0;
+    s.status = 'loading'; s.error = ''; s.controller = new AbortController(); s.stage = 'Consultando título, miniatura e duração...';
+    render();
+    const signal = s.controller.signal, det0 = detectYouTubePage() || { short: false };
+    try {
+      const outcome = await resolveLinkOrListing(s.url, { signal, notes: [], noSkeleton: true, fresh: Boolean(fresh),
+        onStage: label => { if (APP.ytPage === s) { s.stage = label; const el = document.querySelector('#vdd-list .vdd-yt-stage'); if (el) el.textContent = label; } } });
+      if (APP.ytPage !== s) return;
+      checkMediaAbort({ signal });
+      const now = detectYouTubePage();
+      if (!now || now.state !== 'video' || now.id !== s.id) { resetYouTubePage(); render(); return; }
+      const group = (outcome.candidates || []).find(item => item.mediaType === 'youtube');
+      if (!group || group.postId !== s.id) throw mediaError('O Worker respondeu para outro vídeo (ID divergente). Nada foi exibido, para não baixar o vídeo errado.', 'YT_ID_MISMATCH');
+      s.items = orderLinkCandidates(det0.short ? outcome.candidates.map(item => (item.mediaType === 'youtube' ? { ...item, isShort: true } : item)) : outcome.candidates); s.status = 'ready';
+    } catch (error) {
+      if (APP.ytPage !== s) return;
+      if (error.code === 'MEDIA_CANCELLED') s.status = 'idle';
+      else { s.status = 'error'; s.error = error.message || 'Não foi possível consultar este vídeo.'; }
+    } finally { if (APP.ytPage === s) s.controller = null; }
+    if (APP.ytPage === s) render();
+  }
+  function refreshYouTubePage() {
+    const det = detectYouTubePage();
+    if (!det || det.state !== 'video' || !youtubeEnabled() || APP.activeTab !== 'page') return false;
+    resetYouTubePage();
+    const s = ytPageState(det); clearTimeout(s.timer); s.timer = 0; s.status = 'idle';
+    startYouTubePageQuery(s, true);
+    return true;
+  }
+
+  function paintYouTubePage(list, det) {
+    const put = (key, html, count) => { if (list.dataset.ytKey !== key) { list.dataset.ytKey = key; delete list.dataset.signature; list.innerHTML = html; } updateHeaderCount(count); return list; };
+    if (!youtubeEnabled()) { put('off', '<div class="vdd-empty">O YouTube está desligado neste script (LINK_PROXY vazio ou LINK_PROXY_YOUTUBE = false).</div>', 'YouTube desligado'); return; }
+    if (det.state === 'notvideo') { put('notvideo', '<div class="vdd-empty">Abra um vídeo ou Short do YouTube para ver as qualidades de download.<br><br>Esta aba usa o mesmo fluxo de “Por link” (seu Worker + Cobalt).</div>', 'YouTube'); return; }
+    if (det.state === 'unidentified') { put('unidentified', '<div class="vdd-empty">Não consegui identificar o vídeo desta página: a URL não traz o ID e o DOM não tem metadados confiáveis.<br><br>Nada foi baixado. Abra a página do vídeo (youtube.com/watch?v=… ou /shorts/…) ou cole o link em “Por link”.</div>', 'YouTube · vídeo não identificado'); return; }
+    const s = ytPageState(det);
+    if (s.status === 'ready') {
+      if (list.dataset.ytKey !== `ready:${s.id}`) { list.dataset.ytKey = `ready:${s.id}`; delete list.dataset.signature; list.replaceChildren(); }
+      renderMediaList(list, s.items, '', 'page');
+      updateHeaderCount(`${describeLinkResults(s.items)} · ${det.short ? 'Short' : 'vídeo'} do YouTube`);
+      return;
+    }
+    if (s.status === 'error') {
+      put(`error:${s.id}:${s.error}`, `<div class="vdd-empty vdd-yt-error"><strong>Não foi possível consultar este vídeo.</strong><br><br>${escapeHtml(s.error)}<br><br><button type="button" class="vdd-btn" data-yt-retry>Tentar de novo</button></div>`, 'YouTube · erro');
+      const retry = list.querySelector('[data-yt-retry]');
+      if (retry && !retry.dataset.bound) { retry.dataset.bound = '1'; retry.addEventListener('click', () => { if (APP.ytPage === s) startYouTubePageQuery(s, true); }); }
+      return;
+    }
+    put(`loading:${s.id}`, `<div class="vdd-yt-skel" aria-hidden="true"><div class="vdd-yt-skel-thumb"></div><div class="vdd-yt-skel-lines"><i></i><i></i><i></i></div></div><div class="vdd-yt-stage" role="status" aria-live="polite">${escapeHtml(s.stage || 'Preparando a consulta...')}</div>`, 'YouTube · consultando...');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Instagram through the Worker
+  // Reels, posts and carousels via /ig/info, with the anonymous public read as a fallback.
+  // ---------------------------------------------------------------------------
+  const instagramEnabled = () => LINK_PROXY_INSTAGRAM && Boolean(String(LINK_PROXY || '').trim());
+  const IG_FALLBACK_CODES = new Set(['NO_ROUTE', 'YT_NOT_CONFIGURED', 'NOT_CONFIGURED', 'ORIGIN_UNREACHABLE', 'ORIGIN_TIMEOUT', 'WORKER_REQUEST_INVALID',
+    'COBALT_BAD_RESPONSE', 'COBALT_REDIRECT', 'COBALT_KEY_INVALID', 'COBALT_AUTH', 'COBALT_BAD_REQUEST', 'BAD_KEY', 'RATE_LIMITED_LOCAL']);
+
+  async function workerInstagramCandidates(pageUrl, signal, onStage, fresh = false) {
+    const base = workerBase(); if (!instagramEnabled() || !base) return [];
+    onStage?.('Consultando o Instagram pelo seu Worker + Cobalt...');
+    const key = LINK_PROXY_KEY ? `&key=${encodeURIComponent(LINK_PROXY_KEY)}` : '';
+    let response;
+    try { response = await fetch(`${base}/ig/info?url=${encodeURIComponent(pageUrl)}${key}`, { cache: 'no-store', credentials: 'omit', signal }); }
+    catch (error) {
+      if (signal?.aborted) throw mediaError('Busca cancelada.', 'MEDIA_CANCELLED');
+      throw mediaError('Não consegui falar com o seu Worker (rede ou CORS). Confira LINK_PROXY e se o Worker está publicado.', 'IG_WORKER_UNREACHABLE');
+    }
+    let body = null; try { body = await response.json(); } catch {}
+    if (!response.ok || !body?.ok) {
+      const code = String(body?.code || '');
+      const message = `${body?.error || `O Worker respondeu HTTP ${response.status}.`}${body?.hint ? ` ${body.hint}` : ''}`;
+      const error = mediaError(code === 'NO_ROUTE' ? 'O seu Worker é uma versão antiga, sem suporte ao Instagram. Publique o worker.js atualizado.' : message, `IG_${code || `HTTP_${response.status}`}`, response.status);
+      if (!code || IG_FALLBACK_CODES.has(code)) throw error;
+      error.proxyFinal = true; throw error;
+    }
+    const origin = new URL(base).origin;
+    const own = raw => { try { const x = new URL(raw, `${base}/`); return x.origin === origin ? x.href : ''; } catch { return ''; } };
+    const options = (Array.isArray(body.options) ? body.options : []).filter(o => ['video', 'photo'].includes(o.type) && own(o.url));
+    if (!options.length) throw mediaError('O Worker não devolveu nenhum arquivo do Instagram para este link.', 'IG_NO_OPTIONS');
+    const id = String(body.id || ''), total = options.length, author = cleanDisplayText(body.author || '');
+    const baseTitle = author ? `Instagram · @${author}` : `Instagram · ${id}`;
+    const common = { pageUrl: String(body.url || pageUrl), platform: 'instagram', via: 'worker', trusted: true, sourceScope: 'link', detectedAt: Date.now(), postId: id, baseTitle, itemCount: total };
+    return options.map((o, n) => {
+      const thumbnail = /^https:\/\//i.test(String(o.thumbnail || '')) ? String(o.thumbnail) : '';
+      const shared = { ...common, url: own(o.url), title: total > 1 ? `${n + 1}/${total} · ${baseTitle}` : baseTitle, thumbnail, itemIndex: n + 1,
+        sourceKey: `${id}:ig:${o.id}`, fileBase: cleanFilenameBase(o.fileBase || `Instagram-${id}`), qualityLabel: 'Original' };
+      return o.type === 'photo'
+        ? { ...shared, kind: 'IMAGEM', mediaType: 'image', type: String(o.mime || 'image/jpeg'), label: total > 1 ? `Foto ${n + 1}/${total} · original` : 'Foto original', score: 100 }
+        : { ...shared, kind: String(o.container || 'mp4').toUpperCase(), type: String(o.mime || 'video/mp4'), label: 'Arquivo original · pelo Worker + Cobalt', score: 110 };
+    });
+  }
+
+  async function instagramPublicMeta(url, context) {
+    const controller = new AbortController(), parent = context.signal, relay = () => controller.abort();
+    parent?.addEventListener?.('abort', relay, { once: true });
+    const timer = setTimeout(relay, 5000);
+    try {
+      const response = await requestLinkPage(url, { ...context, signal: controller.signal, referrer: url, publicOnly: true, pageCache: true });
+      const final = publicPlatform(response.finalUrl);
+      if (!final || final.kind !== 'instagram' || /\/(?:accounts\/login|login|challenge)(?:\/|\?|$)/.test(response.finalUrl)) return null;
+      const doc = new DOMParser().parseFromString(response.text, 'text/html');
+      const image = safeHttpUrl(doc.querySelector('meta[property="og:image"]')?.getAttribute('content') || '', response.finalUrl);
+      let host = ''; try { host = new URL(image).hostname; } catch {}
+      const thumbnail = image && /(^|\.)(?:cdninstagram\.com|fbcdn\.net)$/i.test(host) ? image : '';
+      const rawTitle = cleanDisplayText(doc.querySelector('meta[property="og:title"]')?.getAttribute('content') || '', 140);
+      const title = /^(?:instagram|login\b|entrar\b)/i.test(rawTitle) && rawTitle.length < 24 ? '' : rawTitle;
+      return thumbnail || title ? { thumbnail, title } : null;
+    } catch { return null; }
+    finally { clearTimeout(timer); parent?.removeEventListener?.('abort', relay); }
+  }
+  function applyInstagramMeta(items, meta) {
+    if (!meta) return items;
+    return items.map(item => ({ ...item, thumbnail: item.thumbnail || meta.thumbnail || '',
+      title: meta.title ? (item.itemCount > 1 ? `${item.itemIndex}/${item.itemCount} · ${meta.title}` : meta.title) : item.title }));
   }
 
   // Downloads through your Worker and keeps the real file type (WebM is not labeled MP4).
@@ -3759,10 +4372,10 @@
       let info = null;
       if (/json/i.test(response.headers.get('content-type') || '')) { try { info = await response.json(); } catch {} }
       if (!info?.code) return;
-      const final = PROXY_FINAL_CODES[info.code];
+      const final = PROXY_FINAL_CODES[info.code] || (YT_FINAL_CODE.test(String(info.code)) ? `${info.error || 'O Worker não conseguiu preparar o YouTube.'}${info.hint ? ` ${info.hint}` : ''}` : '');
       const stage = info.stage ? ` [etapa: ${info.stage}${info.upstreamStatus ? `, HTTP ${info.upstreamStatus} da origem` : ''}]` : '';
       const error = mediaError(`${final || info.error || 'O Worker não conseguiu obter o vídeo.'}${stage}${final ? '' : (info.hint ? ` ${info.hint}` : '')}`, `PROXY_${info.code}`, response.status);
-      error.proxyFinal = Boolean(final); throw error;
+      error.retryAfterMs = (Number(response.headers.get('retry-after')) || Number(info.retryAfter) || 0) * 1000; error.proxyFinal = Boolean(final); throw error;
     } finally { try { await response.body?.cancel(); } catch {} }
   }
 
@@ -6256,7 +6869,7 @@
   // In-page fetching
   // Fetches inside the page or its main world when cookies or origin matter.
   // ---------------------------------------------------------------------------
-  async function fetchBlobInPage(url, onProgress) {
+  async function fetchBlobInPage(url, onProgress, opts = {}) {
     const controller = new AbortController();
     let idleTimer = null;
     const resetIdleTimer = () => {
@@ -6270,7 +6883,7 @@
         ? { method: 'GET', cache: 'no-store', signal: controller.signal }
         : {
             method: 'GET',
-            credentials: 'include',
+            credentials: opts.omitCredentials ? 'omit' : 'include',
             cache: 'no-store',
             redirect: 'follow',
             referrer: currentRequestReferrer(),
@@ -6284,6 +6897,7 @@
         const err = new Error(`Servidor respondeu ${response.status}`);
         err.status = response.status;
         err.contentType = contentType;
+        if (opts.workerErrors) await attachWorkerError(response, err);
         throw err;
       }
 
@@ -6338,6 +6952,7 @@
       }
 
       if (!received) throw new Error('O servidor retornou um arquivo vazio');
+      if (opts.verifyLength && response.status === 200 && total > 0 && received !== total) throw makeHttpError(`Falha de rede: download incompleto (recebidos ${received} de ${total} bytes)`, 0);
       const blob = new Blob(chunks, { type: mediaContentType(contentType) || 'application/octet-stream' });
       const probe = new Uint8Array(await blob.slice(0, 4096).arrayBuffer());
       validateDirectBytes(probe, contentType, response.url || url, response.status);
@@ -7043,6 +7658,7 @@
   }
 
   function isRetryableDirectError(error) {
+    if (error?.proxyFinal) return false;
     const status = directErrorStatus(error);
     if (status) return status === 408 || status === 425 || status === 429 || status >= 500;
     return error?.code === 'MEDIA_NETWORK' || /tempo esgotado|timeout|falha de rede|network error|sem status/i.test(String(error?.message || ''));
@@ -7144,7 +7760,7 @@
     let rangeError = null;
 
     try {
-      const blob = await fetchBlobInPage(freshUrl, progress);
+      const blob = await fetchBlobInPage(freshUrl, progress, opts.singleStream ? { omitCredentials: true, workerErrors: true, verifyLength: true } : {});
       progress(null, 'Validando o arquivo recebido...');
       await saveBlob(blob, filename, progress, { url: freshUrl, contentType: blob.type });
       progress(100, 'Arquivo salvo');
@@ -7154,6 +7770,7 @@
       if (isManualSaveRequired(error)) throw error;
       firstError = error;
       console.info('[VDD] Download no contexto do userscript falhou:', error);
+      if (opts.singleStream && (error?.proxyFinal || [429, 500, 502, 503, 504].includes(Number(error?.status)) || /incompleto/i.test(String(error?.message || '')))) throw error;
     }
 
     if (startedAsBlob) {
@@ -7231,8 +7848,10 @@
         if (isManualSaveRequired(error)) throw error;
         managerError = error;
         console.info('[VDD] Download alternativo falhou:', candidate, error);
+        if (opts.singleStream && (error?.proxyFinal || [429, 500, 502, 503, 504].includes(Number(error?.status)))) throw error;
       }
 
+      if (!opts.singleStream) {
       try {
         await downloadDirectByRanges(candidate, filename, progress);
         return;
@@ -7240,6 +7859,7 @@
         if (isManualSaveRequired(error)) throw error;
         rangeError = error;
         console.info('[VDD] Download por blocos falhou:', candidate, error);
+      }
       }
     }
 
@@ -9113,7 +9733,7 @@
   // ---------------------------------------------------------------------------
   const SOURCE_TILES = Object.freeze([
     { id: 'tiktok', title: 'TikTok', hint: 'Link público de um vídeo', example: 'https://www.tiktok.com/@usuario/video/…', icon: () => siteIcon('https://www.tiktok.com/', 'big') },
-    { id: 'instagram', title: 'Instagram', hint: 'Reels e posts públicos', example: 'https://www.instagram.com/reel/…', icon: () => siteIcon('https://www.instagram.com/', 'big') },
+    { id: 'instagram', title: 'Instagram', hint: 'Reels e posts · via seu Worker + Cobalt', example: 'https://www.instagram.com/reel/…', icon: () => siteIcon('https://www.instagram.com/', 'big') },
     { id: 'youtube', title: 'YouTube', hint: 'Vídeos e Shorts · via seu Worker + Cobalt', example: 'https://www.youtube.com/watch?v=… ou /shorts/…', icon: () => siteIcon('https://www.youtube.com/', 'big') },
     { id: 'file', title: 'Arquivo de vídeo', hint: 'Link direto .mp4, .webm, .mov', example: 'https://site.com/video.mp4', icon: () => `<span class="vdd-glyph">${ic('film')}</span>` },
     { id: 'hls', title: 'Playlist HLS', hint: 'Endereço .m3u8 sem DRM', example: 'https://site.com/video/index.m3u8', icon: () => `<span class="vdd-glyph">${ic('stream')}</span>` },
@@ -9450,6 +10070,7 @@
 
   async function downloadAssetItem(item, title, options) {
     const onProgress = options.onProgress || (() => {}), signal = options.signal, base = cleanFilenameBase(item.fileBase || title);
+    if (item.via === 'worker' && (item.platform === 'youtube' || item.platform === 'instagram')) await proxyPreflightRetry(item.url, signal);
     if (item.platform && !item.via && Date.now() - Number(item.detectedAt || 0) > 45000 && item.postId) {
       onProgress(null, 'Atualizando a URL pública...');
       try { item = { ...(await refreshPublicItem(item)), fileBase: item.fileBase, images: item.images }; } catch {}
@@ -9529,7 +10150,7 @@
       classifyVideoAnchor, extractPageVideoEntries, resolveLinkOrListing, resolveListingEntry, mountLinkListing, teardownLinkListing, listingCache,
       resolvePublicLink, inspectHlsChoices, resolveHlsPlaylist, preflightHlsSegments, entryUrlKey, siteKeyOf, linkPageCache, handleLinkSearch,
       renderLinkResults, openListingEntry, downloadHlsAsMp4, createMediaCard, fetchCredentialsFor, hlsTraceOf, handoffUrl, runHandoff, showTraceToggle,
-      downloadPublicItem, canTryLinkWorker, fetchWorkerInfo, youtubeLink, workerYouTubeCandidates, createYouTubeCard, resolveYouTubeLink, youtubeProbe,
+      downloadPublicItem, canTryLinkWorker, fetchWorkerInfo, youtubeLink, requestLinkPage, workerInstagramCandidates, instagramPublicMeta, detectYouTubePage, refreshYouTubePage, workerYouTubeCandidates, createYouTubeCard, resolveYouTubeLink, youtubeProbe,
       describeCodecs, describeVideoCodec, describeAudioCodec, hlsCodecNote, hlsChoiceLabel, formatFps, describeMp4Moov, formatFileInfo, mergeOutputStats,
       HLS_PREFETCH, hlsPrefetchWindow, scheduleHlsPrefetch, readSegmentBytesPrefetched, DL_QUEUE, dlQueuePush, dlQueueRemove, dlQueueNext, dlQueueRefresh, isoBoxes,
       publicPlatform, pastedPublicUrl, extractSocialCandidates, buildZip, crc32, sniffAudio, blobToMp3, downloadAssetItem, orderLinkCandidates, OUTPUT, POS, PREFS, workerTikTokCandidates, hdLabel,

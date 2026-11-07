@@ -311,6 +311,7 @@ function configOf(env) {
     rateMedia: clamp(Number(env.RATE_MEDIA_PER_MIN) || 1500, 10, 20000),
     cobaltUrl: /^https?:\/\//i.test(String(env.COBALT_API_URL || '').trim()) ? String(env.COBALT_API_URL).trim() : '', cobaltKey: String(env.COBALT_API_KEY || ''),
     ytApiKey: String(env.YOUTUBE_API_KEY || ''), ytQualities: String(env.YT_QUALITIES || ''),
+    cobaltConcurrency: envNum(env.COBALT_CONCURRENCY, 2, 1, 4), cobaltGapMs: envNum(env.COBALT_GAP_MS, 150, 0, 3000), cobaltRetries: envNum(env.COBALT_RETRIES, 2, 0, 4), cobaltBackoffMs: envNum(env.COBALT_BACKOFF_MS, 700, 0, 5000), cobaltCooldownMs: envNum(env.COBALT_COOLDOWN_MS, 8000, 0, 30000),
   };
 }
 const hostAllowed = (cfg, host) => cfg.any || cfg.hosts.some(d => host === d || host.endsWith('.' + d));
@@ -385,7 +386,7 @@ async function unseal(cfg, token, kinds) {
     throw new ProxyError(403, 'BAD_TOKEN', 'auth', 'Token inválido ou adulterado. Peça /info de novo.');
   }
   if (!data || Number(data.e) < Date.now() / 1000) throw new ProxyError(410, 'TOKEN_EXPIRED', 'auth', 'O token expirou. Peça /info de novo.');
-  if (!kinds.includes(data.k) || (data.k !== 'yt' && !safeUrl(data.u))) throw new ProxyError(403, 'BAD_TOKEN', 'auth', 'Token inválido para esta rota.');
+  if (!kinds.includes(data.k) || (data.k !== 'yt' && data.k !== 'ig' && !safeUrl(data.u))) throw new ProxyError(403, 'BAD_TOKEN', 'auth', 'Token inválido para esta rota.');
   return data;
 }
 
@@ -803,9 +804,10 @@ async function handleTiktok(req, target, id, trace, debug, q = {}, origin = '', 
 // ---------------------------------------------------------------------------
 const COBALT_TIMEOUT_MS = 25000;
 const YT_INFO_TTL_MS = 60000, YT_TUNNEL_TTL_MS = 45000;
-const YT_DEFAULT_TIERS = '2160:vp9,1440:vp9,1080,720,480,360';
+const YT_DEFAULT_TIERS = '2160:vp9,1440:vp9,1080,720,480,360,240';
 const YT_HOST = /^(?:www\.|m\.)?(?:youtube\.com|youtube-nocookie\.com)$/i;
 const YT_ANY_HOST = /(^|\.)(youtube\.com|youtu\.be|youtube-nocookie\.com|googlevideo\.com|ytimg\.com)$/i;
+const AUDIO_EXT = /^(?:mp3|m4a|opus|ogg|aac|flac|wav)$/i;
 const MIME_BY_EXT = { mp4: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska', mp3: 'audio/mpeg', m4a: 'audio/mp4', opus: 'audio/ogg', ogg: 'audio/ogg' };
 
 function parseYouTube(raw) {
@@ -836,6 +838,51 @@ function ytTiers(cfg) {
 const cobaltHost = cfg => { try { return new URL(cfg.cobaltUrl).hostname; } catch { return ''; } };
 function needCobalt(cfg) {
   if (!cfg.cobaltUrl) throw new ProxyError(503, 'YT_NOT_CONFIGURED', 'validate', 'O suporte ao YouTube precisa de uma instância Cobalt própria (variável COBALT_API_URL).', { hint: 'Veja as instruções do worker: defina COBALT_API_URL (e o secret COBALT_API_KEY se a instância exigir). Instâncias públicas não são usadas.' });
+}
+
+// Limits concurrent calls to Cobalt, spaces them out and pauses after repeated 429.
+const COBALT_GATE = { active: 0, waiters: [], nextStart: 0 }, COBALT_COOLDOWN = { until: 0, strikes: 0 }, COBALT_MAX_WAIT_MS = 6000;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const envNum = (v, d, lo, hi) => { const n = Number(v); return v === undefined || v === null || v === '' || !Number.isFinite(n) ? d : Math.min(hi, Math.max(lo, n)); };
+function retryAfterMs(res) {
+  const h = res?.headers?.get?.('retry-after'); if (!h) return 0;
+  const n = Number(h); if (Number.isFinite(n)) return Math.max(0, Math.min(n * 1000, 60000));
+  const d = Date.parse(h); return Number.isFinite(d) ? Math.max(0, Math.min(d - Date.now(), 60000)) : 0;
+}
+function backoffMs(cfg, attempt, hintMs) { const base = cfg.cobaltBackoffMs ?? 700; return hintMs > 0 ? hintMs : base * 2 ** attempt + Math.random() * base * 0.3; }
+async function cobaltSlot(cfg, fn) {
+  while (COBALT_GATE.active >= (cfg.cobaltConcurrency || 2)) await new Promise(r => COBALT_GATE.waiters.push(r));
+  COBALT_GATE.active++;
+  try {
+    const startAt = Math.max(Date.now(), COBALT_GATE.nextStart); COBALT_GATE.nextStart = startAt + (cfg.cobaltGapMs ?? 150);
+    if (startAt > Date.now()) await sleep(startAt - Date.now());
+    return await fn();
+  } finally { COBALT_GATE.active--; COBALT_GATE.waiters.shift()?.(); }
+}
+function rateLimitError(ms, upstreamStatus) {
+  return new ProxyError(429, 'COBALT_RATE_LIMIT', 'cobalt', 'A instância Cobalt limitou as requisições (HTTP 429).', { upstreamStatus: upstreamStatus || 429, retryAfter: Math.max(1, Math.ceil(ms / 1000)), hint: 'O Worker já espaçou e repetiu as chamadas. Aguarde alguns segundos; para aliviar, reduza YT_QUALITIES ou aumente RATE_LIMIT_MAX na instância Cobalt.' });
+}
+
+function cobaltKeyOf(cfg) {
+  const k = String(cfg.cobaltKey || '').trim();
+  if (!k) return '';
+  if (k.length > 512 || !/^[\x21-\x7e]+$/.test(k)) throw new ProxyError(500, 'COBALT_KEY_INVALID', 'validate', 'O secret COBALT_API_KEY tem formato inválido (espaço no meio, quebra de linha, caractere não ASCII ou tamanho excessivo).', { hint: 'Defina o secret de novo contendo só a chave, sem aspas, espaços ou quebra de linha. O Worker não mostra o valor.' });
+  return k;
+}
+function safeMsg(cfg, text) {
+  let t = String(text == null ? '' : text);
+  for (const secret of [cfg.cobaltKey, cfg.ytApiKey, cfg.tokenKey, cfg.cobaltUrl]) { const v = String(secret || '').trim(); if (v.length >= 4) t = t.split(v).join('[oculto]'); }
+  return t.replace(/\s+/g, ' ').slice(0, 160);
+}
+function ytFetchError(cfg, e, stage, what, id) {
+  if (e instanceof ProxyError) return e;
+  const name = e?.name || 'Error', msg = safeMsg(cfg, e?.message);
+  log(id, stage, { exception: name, message: msg, host: cobaltHost(cfg) });
+  if (name === 'TimeoutError' || name === 'AbortError') return new ProxyError(504, 'ORIGIN_TIMEOUT', stage, `${what}: a instância Cobalt não respondeu a tempo.`, { hint: 'Confira se o Cobalt e o túnel estão ligados e tente de novo.', details: { exception: name } });
+  const network = /network|connect|lost|refused|reset|unreachable|dns|resolve|socket|timed? ?out|certificate|tls|ssl|proxy|broken pipe|eof|aborted|internal error/i.test(msg);
+  const local = !network && (name === 'TypeError' || name === 'RangeError' || name === 'SyntaxError') && /invalid|unsupported|must be|not implemented|illegal|forbidden|require/i.test(msg);
+  if (local) return new ProxyError(500, 'WORKER_REQUEST_INVALID', stage, `${what}: falha LOCAL do Worker ao preparar a chamada (nenhuma requisição chegou ao Cobalt).`, { hint: 'Não é problema de rede nem do Cobalt: o runtime recusou um argumento da requisição. Veja details.message e o log do Worker.', details: { exception: name, message: msg } });
+  return new ProxyError(502, 'ORIGIN_UNREACHABLE', stage, `${what}: falha de rede ao contactar a instância Cobalt.`, { hint: 'Confira se o Cobalt (Termux) e o túnel estão ligados; se usa Quick Tunnel, a URL muda a cada reinício.', details: { exception: name, message: msg } });
 }
 
 async function ytMeta(cfg, yt, id) {
@@ -892,18 +939,49 @@ function ytBody(yt, spec) {
     ? { url: yt.canonical, downloadMode: 'audio', audioFormat: 'mp3', audioBitrate: '256', filenameStyle: 'classic' }
     : { url: yt.canonical, downloadMode: 'auto', videoQuality: String(spec.v), youtubeVideoCodec: spec.c || 'h264', filenameStyle: 'classic' };
 }
-async function cobaltCall(cfg, body, id) {
+async function cobaltCall(cfg, body, id, mapError = cobaltError, opts = {}) {
   needCobalt(cfg);
-  let res;
-  try {
-    res = await fetch(cfg.cobaltUrl, { method: 'POST', redirect: 'error', signal: timeoutSignal(COBALT_TIMEOUT_MS), body: JSON.stringify(body),
-      headers: { accept: 'application/json', 'content-type': 'application/json', ...(cfg.cobaltKey ? { authorization: `Api-Key ${cfg.cobaltKey}` } : {}) } });
-  } catch (e) { throw netError(e, 'cobalt', 'Consulta ao Cobalt', 'a instância Cobalt'); }
-  let data = null; try { data = await res.json(); } catch {}
-  log(id, 'cobalt', { status: res.status, host: cobaltHost(cfg), result: data?.status || null });
-  if (!data || typeof data !== 'object') throw new ProxyError(502, 'COBALT_BAD_RESPONSE', 'cobalt', `A instância Cobalt respondeu HTTP ${res.status} sem JSON válido.`, { upstreamStatus: res.status, hint: 'COBALT_API_URL deve apontar para a raiz da API do Cobalt (POST /), não para o site da interface.' });
-  if (data.status === 'error' || (!res.ok && !data.status)) throw cobaltError(data, res.status);
-  return data;
+  const key = cobaltKeyOf(cfg), retries = opts.retries ?? cfg.cobaltRetries ?? 2;
+  for (let attempt = 0; ; attempt++) {
+    const cool = COBALT_COOLDOWN.until - Date.now();
+    if (cool > 0) { if (cool <= 1000 && attempt === 0) await sleep(cool); else throw rateLimitError(cool); }
+    let res;
+    try {
+      res = await cobaltSlot(cfg, () => fetch(cfg.cobaltUrl, { method: 'POST', redirect: 'manual', signal: timeoutSignal(COBALT_TIMEOUT_MS), body: JSON.stringify(body),
+        headers: { accept: 'application/json', 'content-type': 'application/json', ...(key ? { authorization: `Api-Key ${key}` } : {}) } }));
+    } catch (e) {
+      const err = ytFetchError(cfg, e, 'cobalt', 'Consulta ao Cobalt', id);
+      if (err.code === 'ORIGIN_UNREACHABLE' && attempt < Math.min(retries, 1)) { await sleep(backoffMs(cfg, attempt, 0)); continue; }
+      throw err;
+    }
+    if (res.status >= 300 && res.status < 400) {
+      try { await res.body?.cancel(); } catch {}
+      let to = ''; try { to = new URL(res.headers.get('location') || '', cfg.cobaltUrl).hostname; } catch {}
+      log(id, 'cobalt', { status: res.status, host: cobaltHost(cfg), redirectTo: to || null });
+      throw new ProxyError(502, 'COBALT_REDIRECT', 'cobalt', `A instância Cobalt respondeu com redirecionamento (HTTP ${res.status}); o Worker não o segue para não reenviar a chave.`, { upstreamStatus: res.status, hint: 'Ajuste COBALT_API_URL para a URL final (https, sem redirecionamento) da API do Cobalt.', details: { redirectHost: to || null } });
+    }
+    const hint = retryAfterMs(res);
+    let data = null; try { data = await res.json(); } catch {}
+    log(id, 'cobalt', { status: res.status, host: cobaltHost(cfg), result: data?.status || null, attempt });
+    const rateCode = /rate|capacity/i.test(String(data?.error?.code || ''));
+    const transient = res.status === 429 || rateCode || res.status === 502 || res.status === 503 || res.status === 504;
+    if (transient) {
+      const limited = res.status === 429 || rateCode;
+      const wait = backoffMs(cfg, attempt, hint);
+      if (attempt < retries && wait <= COBALT_MAX_WAIT_MS) { try { await sleep(wait); } catch {} continue; }
+      if (limited) {
+        COBALT_COOLDOWN.strikes = Math.min(COBALT_COOLDOWN.strikes + 1, 6);
+        const pauseMs = Math.min(Math.max(hint, cfg.cobaltCooldownMs ?? 8000) * 2 ** (COBALT_COOLDOWN.strikes - 1), 30000);
+        COBALT_COOLDOWN.until = Math.max(COBALT_COOLDOWN.until, Date.now() + pauseMs);
+        throw rateLimitError(pauseMs, res.status);
+      }
+      throw new ProxyError(503, 'COBALT_UNAVAILABLE', 'cobalt', `A instância Cobalt está indisponível ou sobrecarregada (HTTP ${res.status}).`, { upstreamStatus: res.status, retryAfter: Math.max(5, Math.ceil(hint / 1000) || 10), hint: 'Se o Cobalt roda no celular (Termux), confira se ele e o túnel seguem ligados; o Worker já repetiu a chamada com espera progressiva.' });
+    }
+    if (!data || typeof data !== 'object') throw new ProxyError(502, 'COBALT_BAD_RESPONSE', 'cobalt', `A instância Cobalt respondeu HTTP ${res.status} sem JSON válido.`, { upstreamStatus: res.status, hint: 'COBALT_API_URL deve apontar para a raiz da API do Cobalt (POST /), não para o site da interface.' });
+    COBALT_COOLDOWN.strikes = 0;
+    if (data.status === 'error' || (!res.ok && !data.status)) throw mapError(data, res.status);
+    return data;
+  }
 }
 function tunnelAllowed(cfg, href, status) {
   let t; try { t = new URL(href); } catch { return false; }
@@ -916,7 +994,8 @@ function describeCobaltFile(data, spec) {
   if (spec.m === 'audio') return { type: 'audio', container: 'mp3', ext: 'mp3', mime: 'audio/mpeg' };
   const m = fn.match(/_(\d{3,4})x(\d{3,4})_(h264|vp9|av1)(?:_[^_.]+)?\.([a-z0-9]{2,5})$/i);
   const ext = (m ? m[4] : (fn.match(/\.([a-z0-9]{2,5})$/i) || [])[1] || '').toLowerCase();
-  const out = { type: 'video', container: ext || null, ext: ext || 'mp4', mime: MIME_BY_EXT[ext] || 'video/mp4', codec: m ? m[3].toLowerCase() : null };
+  const audioOnly = AUDIO_EXT.test(ext) || (!m && /(?:^|_)audio(?:\.[a-z0-9]{2,5})?$/i.test(fn));
+  const out = { type: 'video', audioOnly, container: ext || null, ext: ext || 'mp4', mime: MIME_BY_EXT[ext] || 'video/mp4', codec: m ? m[3].toLowerCase() : null };
   if (m) { out.width = +m[1]; out.height = +m[2]; out.quality = Math.min(+m[1], +m[2]); }
   return out;
 }
@@ -932,7 +1011,15 @@ async function tunnelHeaders(cfg, href, id) {
 }
 
 const YT_INFO_CACHE = new Map();
+// Short cache for permanent failures, so repeated searches do not reach Cobalt.
+const YT_FAIL_CACHE = new Map(), YT_NEGATIVE = new Set(['YT_LOGIN_REQUIRED', 'VIDEO_PRIVATE', 'VIDEO_UNAVAILABLE', 'VIDEO_NOT_FOUND', 'YT_LIVE', 'YT_TOO_LONG', 'YT_UNSUPPORTED', 'YT_REGION']);
 async function ytInfo(cfg, req, u, target, id) {
+  const vid = parseYouTube(target.href)?.id, failed = vid && YT_FAIL_CACHE.get(vid);
+  if (failed && Date.now() - failed.t < 20000) throw failed.err;
+  try { return await ytInfoCore(cfg, req, u, target, id); }
+  catch (e) { if (vid && e instanceof ProxyError && YT_NEGATIVE.has(e.code)) { YT_FAIL_CACHE.set(vid, { t: Date.now(), err: e }); while (YT_FAIL_CACHE.size > 32) YT_FAIL_CACHE.delete(YT_FAIL_CACHE.keys().next().value); } throw e; }
+}
+async function ytInfoCore(cfg, req, u, target, id) {
   needCobalt(cfg); await aesKey(cfg);
   const yt = parseYouTube(target.href);
   if (!yt) throw new ProxyError(400, 'BAD_YT_URL', 'validate', 'Link do YouTube não reconhecido. Use youtube.com/watch?v=…, youtu.be/…, youtube.com/shorts/… ou /embed/….');
@@ -943,16 +1030,31 @@ async function ytInfo(cfg, req, u, target, id) {
   const meta = await ytMeta(cfg, yt, id);
   if (meta.notFound) throw new ProxyError(404, 'VIDEO_NOT_FOUND', 'page', 'Vídeo não encontrado (removido, privado ou link errado).');
   if (meta.live) throw new ProxyError(422, 'YT_LIVE', 'page', 'Transmissões ao vivo (ou estreias agendadas) não são suportadas.');
-  const specs = [...ytTiers(cfg).map(t => ({ m: 'auto', v: t.q, c: t.codec })), { m: 'audio' }];
-  const settled = await Promise.allSettled(specs.map(s => cobaltCall(cfg, ytBody(yt, s), id)));
+  const specs = ytTiers(cfg).map(t => ({ m: 'auto', v: t.q, c: t.codec }));
+  const outcomes = new Array(specs.length), seenActual = []; let limited = null, cursor = 0;
+  const lane = async () => {
+    while (cursor < specs.length) {
+      const i = cursor++, s = specs[i];
+      if (limited) { outcomes[i] = { skipped: 'limite' }; continue; }
+      if (s.m !== 'audio' && seenActual.some(r => r.codec === s.c && r.requested > Number(s.v) && r.actual && r.actual <= Number(s.v))) { outcomes[i] = { skipped: 'redundante' }; continue; }
+      try {
+        const d = await cobaltCall(cfg, ytBody(yt, s), id); outcomes[i] = { value: d };
+        if (s.m !== 'audio') seenActual.push({ codec: s.c, requested: Number(s.v), actual: describeCobaltFile(d, s).quality || 0 });
+      } catch (e) { outcomes[i] = { error: e }; if (e?.code === 'COBALT_RATE_LIMIT' || e?.code === 'COBALT_UNAVAILABLE') limited ||= e; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(cfg.cobaltConcurrency || 2, specs.length) }, lane));
   const warnings = [], videos = [], seen = new Set();
   let audio = null, firstErr = null;
+  if (limited) warnings.push(`Lista parcial: o Cobalt ficou limitado/indisponível (${limited.code}). Aguarde alguns segundos e busque de novo.`);
   for (let i = 0; i < specs.length; i++) {
-    const s = specs[i], r = settled[i];
-    if (r.status === 'rejected') { firstErr ||= r.reason; if (s.m === 'audio' || specs.length > 1) warnings.push(`${s.m === 'audio' ? 'Áudio' : `${s.v}p`}: ${r.reason?.message || 'falhou'}`); continue; }
-    const d = r.value;
+    const s = specs[i], o = outcomes[i] || {};
+    if (o.skipped) continue;
+    if (o.error) { firstErr ||= o.error; if (!(limited && (o.error?.code === limited.code))) warnings.push(`${s.m === 'audio' ? 'Áudio' : `${s.v}p`}: ${o.error?.message || 'falhou'}`); continue; }
+    const d = o.value;
     if (!['tunnel', 'redirect'].includes(d.status) || !d.url || !tunnelAllowed(cfg, d.url, d.status)) { warnings.push(`${s.m === 'audio' ? 'Áudio' : `${s.v}p`}: resposta "${d.status}" do Cobalt não é um download direto.`); continue; }
     const f = describeCobaltFile(d, s), spec = s.m === 'audio' ? { m: 'audio' } : { m: 'auto', v: s.v, c: s.c };
+    if (s.m !== 'audio' && f.audioOnly) { warnings.push(`${s.v}p: o Cobalt devolveu somente áudio para o pedido de vídeo; opção descartada.`); continue; }
     const opt = { ...f, requested: s.m === 'audio' ? null : Number(s.v), _tunnel: d.url, _spec: spec };
     if (s.m === 'audio') { audio = opt; continue; }
     if (s.c === 'vp9' && f.quality && f.quality <= 1080) continue;
@@ -961,10 +1063,11 @@ async function ytInfo(cfg, req, u, target, id) {
     if (!f.quality) warnings.push(`${s.v}p: a instância não informou a resolução final; o rótulo "até ${s.v}p" é o teto pedido, não uma resolução confirmada.`);
     videos.push(opt);
   }
-  if (!videos.length && !audio) throw firstErr || new ProxyError(502, 'YT_NO_FORMATS', 'cobalt', 'O Cobalt não devolveu nenhum formato baixável para este vídeo.');
+  if (videos.length && !audio) audio = { type: 'audio', container: 'mp3', ext: 'mp3', mime: 'audio/mpeg', requested: null, _tunnel: '', _spec: { m: 'audio' } };
+  if (!videos.length && !audio) throw firstErr || new ProxyError(502, 'YT_NO_FORMATS', 'cobalt', 'O Cobalt não devolveu nenhum formato de VÍDEO baixável para este vídeo.', { details: { warnings: warnings.slice(0, 6) }, hint: warnings[0] || undefined });
   videos.sort((a, b) => (b.quality || b.requested || 0) - (a.quality || a.requested || 0) || (a.container === 'mp4' ? -1 : 1));
   const all = [...videos, ...(audio ? [audio] : [])];
-  if (wantSizes) await Promise.all(all.map(async o => { o.size = await tunnelHeaders(cfg, o._tunnel, id); }));
+  if (wantSizes) await Promise.all(all.filter(o => o._tunnel).map(async o => { o.size = await tunnelHeaders(cfg, o._tunnel, id); }));
   const nameBase = (meta.title || `youtube-${yt.id}`).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || `youtube-${yt.id}`;
   const options = [];
   for (const o of all) {
@@ -976,67 +1079,247 @@ async function ytInfo(cfg, req, u, target, id) {
       size: o.size ? { bytes: o.size.bytes, kind: o.size.kind } : null, fileBase, url: `${u.origin}/yt/dl?t=${token}` });
   }
   const body = { ok: true, requestId: id, adapter: 'youtube', id: yt.id, kind: yt.kind, url: yt.canonical, title: meta.title || null, author: meta.author || null, thumbnail: meta.thumbnail,
-    duration: meta.duration, expiresIn: cfg.ttl, options, warnings, sources: { metadata: meta.sources, download: 'cobalt' } };
-  YT_INFO_CACHE.set(ck, { t: Date.now(), body }); while (YT_INFO_CACHE.size > 16) YT_INFO_CACHE.delete(YT_INFO_CACHE.keys().next().value);
+    duration: meta.duration, expiresIn: cfg.ttl, options, warnings, partial: Boolean(limited), sources: { metadata: meta.sources, download: 'cobalt' } };
+  if (!limited) YT_INFO_CACHE.set(ck, { t: Date.now(), body }); while (YT_INFO_CACHE.size > 16) YT_INFO_CACHE.delete(YT_INFO_CACHE.keys().next().value);
   return json(200, body);
 }
 
 const YT_TUNNELS = new Map();
+// Retries opening the Cobalt tunnel on 429, 502, 503 and 504 before any byte is sent.
+async function retryTunnel(cfg, res, open) {
+  for (let attempt = 0; attempt < (cfg.cobaltRetries ?? 2) && [429, 502, 503, 504].includes(res.status); attempt++) {
+    const hint = retryAfterMs(res), wait = backoffMs(cfg, attempt, hint);
+    if (wait > COBALT_MAX_WAIT_MS) break;
+    try { await res.body?.cancel(); } catch {}
+    await sleep(wait); res = await open();
+  }
+  return res;
+}
+// Turns a truncated transfer into an error when the length is known.
+function lengthGuard(body, expected) {
+  let n = 0;
+  return body.pipeThrough(new TransformStream({ transform(chunk, ctl) { n += chunk.byteLength; ctl.enqueue(chunk); }, flush() { if (n !== expected) throw new Error(`fluxo incompleto: ${n} de ${expected} bytes`); } }));
+}
 async function ytDownload(cfg, req, u, id) {
   needCobalt(cfg); rateCheck('resolve', req, cfg.rateResolve * 4);
   const tokenStr = u.searchParams.get('t') || '', p = await unseal(cfg, tokenStr, ['yt']);
   const yt = { id: p.id, canonical: `https://www.youtube.com/watch?v=${p.id}` };
   if (!/^[\w-]{11}$/.test(String(p.id))) throw new ProxyError(403, 'BAD_TOKEN', 'auth', 'Token inválido para esta rota.');
   const spec = p.m === 'audio' ? { m: 'audio' } : { m: 'auto', v: String(p.v), c: p.c || 'h264' };
-  let call; const cached = YT_TUNNELS.get(tokenStr);
-  if (cached && Date.now() - cached.t < YT_TUNNEL_TTL_MS) { call = cached.call; if (req.method !== 'HEAD') YT_TUNNELS.delete(tokenStr); }
-  else {
+  const resolveCall = async () => {
     const d = await cobaltCall(cfg, ytBody(yt, spec), id);
     if (!['tunnel', 'redirect'].includes(d.status) || !d.url) throw new ProxyError(502, 'COBALT_NOT_DIRECT', 'cobalt', `O Cobalt respondeu "${d.status}" em vez de um download direto.`, { hint: d.status === 'local-processing' ? 'Esta instância exige processamento local (remux no cliente); o Worker pede localProcessing=disabled, confira a configuração.' : undefined });
     if (!tunnelAllowed(cfg, d.url, d.status)) throw new ProxyError(502, 'TUNNEL_HOST', 'cobalt', 'O Cobalt apontou para um host fora da instância configurada; o Worker recusou.', { details: { host: hostOf(d.url) } });
-    call = { url: d.url, status: d.status, file: describeCobaltFile(d, spec) };
-    if (req.method === 'HEAD') { YT_TUNNELS.set(tokenStr, { t: Date.now(), call }); while (YT_TUNNELS.size > 24) YT_TUNNELS.delete(YT_TUNNELS.keys().next().value); }
-  }
+    const call = { url: d.url, status: d.status, file: describeCobaltFile(d, spec) };
+    if (spec.m !== 'audio' && call.file.audioOnly) throw new ProxyError(502, 'YT_AUDIO_ONLY', 'cobalt', 'O Cobalt entregou somente áudio para este pedido de vídeo. Nada foi baixado.', { hint: 'Busque o vídeo de novo e escolha outra qualidade; se persistir, atualize a instância Cobalt (falha de remux/streams no extrator).', details: { cobaltFile: String(d.filename || '').slice(0, 80) } });
+    YT_TUNNELS.set(tokenStr, { t: Date.now(), call }); while (YT_TUNNELS.size > 24) YT_TUNNELS.delete(YT_TUNNELS.keys().next().value);
+    return call;
+  };
+  const cached = YT_TUNNELS.get(tokenStr); let reused = Boolean(cached && Date.now() - cached.t < YT_TUNNEL_TTL_MS);
+  let call = reused ? cached.call : await resolveCall();
+  if (u.searchParams.get('probe') === '1') return json(200, { ok: true, probe: true, type: call.file.type, container: call.file.container || null, quality: call.file.quality || null });
   const f = call.file, name = `${String(p.n || `youtube-${p.id}`).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').trim().slice(0, 100) || 'youtube'}.${f.ext}`;
   const disp = `attachment; filename="${name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(name)}`;
   const out = new Headers(CORS);
   out.set('content-disposition', disp); out.set('x-content-type-options', 'nosniff'); out.set('x-optdowns-stage', 'cobalt'); out.set('cache-control', 'no-store');
   if (f.quality) out.set('x-optdowns-yt-format', `${f.quality}p ${f.container || ''} ${f.codec || ''}`.trim());
   if (req.method === 'HEAD') { out.set('content-type', f.mime); out.set('accept-ranges', 'none'); return new Response(null, { status: 200, headers: out }); }
-  let res;
-  try {
-    res = await fetch(call.url, { redirect: 'manual', headers: { 'accept-encoding': 'identity', ...(req.headers.get('range') ? { range: req.headers.get('range') } : {}) }, signal: timeoutSignal(CDN_TIMEOUT_MS) });
-  } catch (e) { throw netError(e, 'cdn', 'Download pelo Cobalt', 'a instância Cobalt'); }
+  const openTunnel = async () => {
+    try { return await fetch(call.url, { redirect: 'manual', headers: { 'accept-encoding': 'identity' }, signal: timeoutSignal(CDN_TIMEOUT_MS) }); }
+    catch (e) { throw ytFetchError(cfg, e, 'cdn', 'Download pelo Cobalt', id); }
+  };
+  let res = await openTunnel();
+  res = await retryTunnel(cfg, res, openTunnel);
+  if (reused && (res.status === 404 || res.status === 410)) { try { await res.body?.cancel(); } catch {} YT_TUNNELS.delete(tokenStr); reused = false; call = await resolveCall(); res = await openTunnel(); }
   log(id, 'cdn', { host: hostOf(call.url), status: res.status, kind: 'yt' });
-  if (res.status === 416) return new Response(null, { status: 416, headers: { ...CORS, 'content-range': res.headers.get('content-range') || '' } });
-  if (res.status !== 200 && res.status !== 206) {
-    try { await res.body?.cancel(); } catch {}
+  if (res.status !== 200) {
+    const hintMs = retryAfterMs(res); try { await res.body?.cancel(); } catch {}
     if (res.status === 404 || res.status === 410) throw new ProxyError(410, 'TUNNEL_EXPIRED', 'cdn', 'O link temporário do Cobalt expirou. Busque o vídeo de novo.', { upstreamStatus: res.status });
-    if (res.status === 429) throw new ProxyError(429, 'COBALT_RATE_LIMIT', 'cdn', 'A instância Cobalt limitou os downloads.', { upstreamStatus: 429, retryAfter: Number(res.headers.get('retry-after')) || 30 });
+    if (res.status === 429) throw rateLimitError(Math.max(hintMs, 15000), 429);
+    if (res.status === 502 || res.status === 503 || res.status === 504) throw new ProxyError(503, 'COBALT_UNAVAILABLE', 'cdn', `O túnel do Cobalt está indisponível ou sobrecarregado (HTTP ${res.status}).`, { upstreamStatus: res.status, retryAfter: Math.max(5, Math.ceil(hintMs / 1000) || 10), hint: 'O Worker já repetiu com espera progressiva. Aguarde e tente de novo.' });
     throw new ProxyError(502, 'COBALT_TUNNEL_FAILED', 'cdn', `O Cobalt respondeu HTTP ${res.status} ao entregar o arquivo.`, { upstreamStatus: res.status });
   }
   const type = res.headers.get('content-type') || '';
+  if (spec.m !== 'audio' && /^audio\//i.test(type)) { try { await res.body?.cancel(); } catch {} throw new ProxyError(502, 'YT_AUDIO_ONLY', 'cdn', `O túnel do Cobalt entregou "${type.split(';')[0]}" (somente áudio) para um pedido de vídeo. Nada foi baixado.`, { hint: 'Busque o vídeo de novo e escolha outra qualidade; se persistir, atualize a instância Cobalt.' }); }
   if (BAD_MEDIA_TYPE.test(type)) { try { await res.body?.cancel(); } catch {} throw new ProxyError(502, 'NOT_MEDIA', 'cdn', `O Cobalt respondeu "${type.split(';')[0]}" em vez de mídia.`); }
   const len = Number(res.headers.get('content-length')) || 0, est = Number(res.headers.get('estimated-content-length')) || 0;
   if (len > cfg.maxBytes || est > cfg.maxBytes) { try { await res.body?.cancel(); } catch {} throw new ProxyError(413, 'TOO_LARGE', 'cdn', 'O arquivo excede o limite configurado no Worker (MAX_BYTES).', { details: { limit: cfg.maxBytes } }); }
   out.set('content-type', /^(video|audio)\//i.test(type) ? type : f.mime);
-  for (const h of ['content-length', 'content-range', 'accept-ranges']) if (res.headers.get(h)) out.set(h, res.headers.get(h));
+  const realExt = f.type === 'video' ? { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/x-matroska': 'mkv' }[type.split(';')[0].trim().toLowerCase()] : undefined;
+  if (realExt && realExt !== f.ext) { const nm = name.replace(/\.[a-z0-9]{2,5}$/i, `.${realExt}`); out.set('content-disposition', `attachment; filename="${nm.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(nm)}`); out.set('x-optdowns-ext-corrected', `${f.ext}->${realExt}`); }
+  if (len) out.set('content-length', String(len)); out.set('accept-ranges', 'none');
   if (!len && est) out.set('x-optdowns-estimated-length', String(est));
-  return new Response(res.body ? limitStream(res.body, cfg.maxBytes) : null, { status: res.status, headers: out });
+  return new Response(res.body ? limitStream(len ? lengthGuard(res.body, len) : res.body, cfg.maxBytes) : null, { status: 200, headers: out });
 }
 
-async function ytStatus(cfg, id) {
-  const out = { ok: true, requestId: id, configured: { cobaltUrl: !!cfg.cobaltUrl, cobaltKey: !!cfg.cobaltKey, youtubeApiKey: !!cfg.ytApiKey, tokenKey: !!cfg.tokenKey }, tiers: ytTiers(cfg).map(t => `${t.q}:${t.codec}`) };
+async function ytStatus(cfg, id, u) {
+  let keyValid = null; if (cfg.cobaltKey) { try { cobaltKeyOf(cfg); keyValid = true; } catch { keyValid = false; } }
+  const out = { ok: true, requestId: id, configured: { cobaltUrl: !!cfg.cobaltUrl, cobaltKey: !!cfg.cobaltKey, cobaltKeyValid: keyValid, youtubeApiKey: !!cfg.ytApiKey, tokenKey: !!cfg.tokenKey }, tiers: ytTiers(cfg).map(t => `${t.q}:${t.codec}`) };
   if (!cfg.cobaltUrl) return json(200, { ...out, ok: false, problem: 'COBALT_API_URL não definido: o YouTube está desligado neste Worker.' });
   if (!cfg.tokenKey) out.ok = false, out.problem = 'Defina TOKEN_KEY (ou SECRET): os links de download do YouTube são tokens cifrados.';
+  if (keyValid === false) out.ok = false, out.problem ||= 'COBALT_API_KEY tem formato inválido (espaço no meio, quebra de linha ou caractere não ASCII). O valor não é exibido.';
   try {
-    const r = await fetch(cfg.cobaltUrl, { headers: { accept: 'application/json' }, signal: timeoutSignal(9000) });
+    const r = await fetch(cfg.cobaltUrl, { headers: { accept: 'application/json' }, redirect: 'manual', signal: timeoutSignal(9000) });
+    if (r.status >= 300 && r.status < 400) { try { await r.body?.cancel(); } catch {} out.cobalt = { httpStatus: r.status, redirect: true }; out.ok = false; out.problem ||= `A URL redireciona (HTTP ${r.status}); use a URL final em COBALT_API_URL.`; return json(200, out); }
     let d = null; try { d = await r.json(); } catch {}
-    out.cobalt = { httpStatus: r.status, version: d?.cobalt?.version || null, servicesListYoutube: Array.isArray(d?.cobalt?.services) ? d.cobalt.services.includes('youtube') : null };
+    out.cobalt = { httpStatus: r.status, version: d?.cobalt?.version || null, servicesListYoutube: Array.isArray(d?.cobalt?.services) ? d.cobalt.services.includes('youtube') : null, servicesListInstagram: Array.isArray(d?.cobalt?.services) ? d.cobalt.services.includes('instagram') : null };
     if (!d?.cobalt) { out.ok = false; out.problem ||= 'A URL respondeu, mas não parece ser a API do Cobalt (GET / sem o objeto "cobalt").'; }
     else if (out.cobalt.servicesListYoutube === false) { out.ok = false; out.problem ||= 'Esta instância Cobalt não lista o serviço YouTube.'; }
-  } catch (e) { out.ok = false; out.cobalt = { reachable: false, error: e?.name === 'TimeoutError' ? 'sem resposta em 9 s' : 'falha de rede' }; out.problem ||= 'O Worker não conseguiu falar com a instância Cobalt.'; }
+  } catch (e) {
+    const err = ytFetchError(cfg, e, 'cobalt', 'Leitura do Cobalt', id);
+    out.ok = false; out.cobalt = { reachable: false, code: err.code, exception: err.extra?.details?.exception || null, message: err.extra?.details?.message || null };
+    out.problem ||= err.code === 'WORKER_REQUEST_INVALID' ? 'Falha local do Worker ao chamar o Cobalt (não é rede).' : 'O Worker não conseguiu falar com a instância Cobalt.';
+    return json(200, out);
+  }
+  if (u?.searchParams.get('auth') !== '0' && keyValid !== false) {
+    try {
+      await cobaltCall(cfg, { url: 'https://invalid.invalid/', downloadMode: 'auto' }, id);
+      out.auth = { checked: true, result: 'ok' };
+    } catch (e) {
+      const code = e?.code || 'ERRO';
+      if (code === 'YT_UNSUPPORTED') out.auth = { checked: true, result: 'ok', note: 'o Cobalt autenticou e recusou o link de teste, como esperado' };
+      else { out.auth = { checked: true, result: code === 'COBALT_AUTH' ? 'rejected' : 'error', code, httpStatus: e?.extra?.upstreamStatus ?? null, ...(e?.extra?.details?.message ? { message: e.extra.details.message } : {}) }; out.ok = false; out.problem ||= code === 'COBALT_AUTH' ? 'O Cobalt recusou a chave COBALT_API_KEY (ou exige uma e ela não está definida).' : `O POST autenticado ao Cobalt falhou (${code}): ${e?.message || ''}`.slice(0, 220); }
+    }
+  } else if (u?.searchParams.get('auth') === '0') out.auth = { checked: false };
   return json(200, out);
+}
+
+// ---------------------------------------------------------------------------
+// Instagram
+// Reels, posts and carousels through your Cobalt instance. Only public og: tags are read from Instagram.
+// ---------------------------------------------------------------------------
+const IG_HOST = /(^|\.)(instagram\.com|instagr\.am)$/i;
+const IG_CDN = /(^|\.)(cdninstagram\.com|fbcdn\.net)$/i;
+const IG_INFO_TTL_MS = 60000, IG_TUNNEL_TTL_MS = 45000;
+const IG_NOT_USERS = /^(?:p|reels?|tv|share|stories|explore|accounts|direct|about|developer|legal|web)$/i;
+const IG_EXT_TYPE = { mp4: 'video', m4v: 'video', mov: 'video', webm: 'video', jpg: 'photo', jpeg: 'photo', png: 'photo', webp: 'photo', heic: 'photo' };
+const IG_MIME_EXT = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic' };
+
+function parseInstagram(raw) {
+  let u; try { u = new URL(raw); } catch { return null; }
+  if (u.protocol !== 'https:' || u.username || u.password || !IG_HOST.test(u.hostname)) return null;
+  const path = u.pathname.replace(/\/{2,}/g, '/');
+  if (/^\/stories\//i.test(path)) return { story: true };
+  const s = path.match(/^\/share\/(?:(p|reels?|tv)\/)?([\w-]{5,})(?:\/|$)/i);
+  if (s) return { kind: 'share', code: s[2], author: null, canonical: `https://www.instagram.com/share/${s[1] ? `${s[1].toLowerCase()}/` : ''}${s[2]}/` };
+  const m = path.match(/^\/(?:([\w.]{1,30})\/)?(p|reels?|tv)\/([\w-]{5,})(?:\/|$)/i);
+  if (m) {
+    const kind = /^reels?$/i.test(m[2]) ? 'reel' : m[2].toLowerCase() === 'tv' ? 'tv' : 'post';
+    const seg = kind === 'reel' ? 'reel' : kind === 'tv' ? 'tv' : 'p', author = m[1] && !IG_NOT_USERS.test(m[1]) ? m[1] : null;
+    return { kind, code: m[3], author, canonical: `https://www.instagram.com/${seg}/${m[3]}/` };
+  }
+  return null;
+}
+function igCobaltError(data, httpStatus) {
+  const code = String(data?.error?.code || ''), c = code.toLowerCase();
+  if (/(^|\.)auth(\.|$)|rate|capacity|invalid_body|schema/.test(c)) return cobaltError(data, httpStatus);
+  const E = (st, wcode, msg, hint) => new ProxyError(st, wcode, 'cobalt', msg, { upstreamStatus: httpStatus || null, hint, details: { cobalt: code || null } });
+  if (/private/.test(c)) return E(403, 'IG_PRIVATE', 'Este conteúdo do Instagram é privado: só seguidores aprovados podem vê-lo.');
+  if (/(^|\.)age(\.|$)|login|checkpoint|challenge/.test(c)) return E(403, 'IG_LOGIN_REQUIRED', 'O Instagram exigiu login para este conteúdo (restrição de idade, perfil que bloqueia visitantes ou verificação).', 'O Worker não contorna login. Só uma sessão autorizada configurada na SUA instância Cobalt (conforme a documentação dela) pode atender isso.');
+  if (/unavailable|not_found|deleted|removed/.test(c)) return E(404, 'IG_UNAVAILABLE', 'O conteúdo está indisponível: foi removido, o perfil o tornou privado ou o link está errado.');
+  if (/fetch\.empty|no_media|nothing/.test(c)) return E(422, 'IG_NO_MEDIA', 'O Instagram não entregou nenhuma mídia baixável para este link (o post pode não ter vídeo/foto acessível ou a leitura foi recusada).');
+  if (/fetch\.(fail|critical)|blocked|forbidden/.test(c)) return E(502, 'IG_BLOCKED', 'O Instagram recusou ou bloqueou a leitura feita pela instância Cobalt (comum em IPs de servidor e quando ele pede verificação).', 'Tente de novo mais tarde. Se persistir, atualize o Cobalt; o Worker não contorna bloqueios.');
+  if (/link\.(invalid|unsupported)|service\.(unsupported|disabled)/.test(c)) return E(422, 'IG_UNSUPPORTED', 'Esta instância Cobalt não aceita este link do Instagram.', c.includes('disabled') ? 'O serviço Instagram está desativado nesta instância.' : undefined);
+  return cobaltError(data, httpStatus);
+}
+function igUrlAllowed(cfg, href) {
+  let t; try { t = new URL(href); } catch { return false; }
+  if (t.username || t.password) return false;
+  return t.hostname === cobaltHost(cfg) || (t.protocol === 'https:' && IG_CDN.test(t.hostname));
+}
+function igItems(cfg, d) {
+  const warnings = [], items = [];
+  if (['tunnel', 'redirect'].includes(d.status) && d.url) {
+    const ext = (String(d.filename || '').match(/\.([a-z0-9]{2,5})$/i) || [])[1]?.toLowerCase() || '';
+    items.push({ i: 0, type: IG_EXT_TYPE[ext] || 'video', url: d.url, thumb: '', filename: String(d.filename || '') });
+  } else if (d.status === 'picker' && Array.isArray(d.picker)) {
+    d.picker.slice(0, 20).forEach((p, i) => items.push({ i, type: p?.type === 'photo' ? 'photo' : 'video', url: String(p?.url || ''), thumb: String(p?.thumb || ''), filename: '' }));
+  } else return { items, warnings: [`resposta "${d.status}" do Cobalt não traz arquivos baixáveis`] };
+  const ok = items.filter(it => { const good = it.url && igUrlAllowed(cfg, it.url); if (!good) warnings.push(`item ${it.i + 1}: URL fora da instância Cobalt/CDN do Instagram foi ignorada`); return good; });
+  for (const it of ok) { let th = ''; try { const t = new URL(it.thumb); if (t.protocol === 'https:' && IG_CDN.test(t.hostname)) th = t.href; } catch {} it.thumb = th; }
+  return { items: ok, warnings };
+}
+
+const IG_INFO_CACHE = new Map(), IG_TUNNELS = new Map();
+const IG_FAIL_CACHE = new Map(), IG_NEGATIVE = new Set(['IG_PRIVATE', 'IG_LOGIN_REQUIRED', 'IG_UNAVAILABLE', 'IG_NO_MEDIA', 'IG_UNSUPPORTED']);
+async function igInfo(cfg, req, u, target, id) {
+  const canon = parseInstagram(target.href)?.canonical, failed = canon && IG_FAIL_CACHE.get(canon);
+  if (failed && Date.now() - failed.t < 20000) throw failed.err;
+  try { return await igInfoCore(cfg, req, u, target, id); }
+  catch (e) { if (canon && e instanceof ProxyError && IG_NEGATIVE.has(e.code)) { IG_FAIL_CACHE.set(canon, { t: Date.now(), err: e }); while (IG_FAIL_CACHE.size > 32) IG_FAIL_CACHE.delete(IG_FAIL_CACHE.keys().next().value); } throw e; }
+}
+async function igInfoCore(cfg, req, u, target, id) {
+  needCobalt(cfg); await aesKey(cfg);
+  const ig = parseInstagram(target.href);
+  if (ig?.story) throw new ProxyError(422, 'IG_STORY', 'validate', 'Stories do Instagram exigem login e não são suportados em “Por link”. Abra o story no navegador, reproduza e use “Nesta página”.');
+  if (!ig) throw new ProxyError(400, 'BAD_IG_URL', 'validate', 'Link do Instagram não reconhecido. Use instagram.com/reel/…, /p/…, /tv/… ou um link de compartilhamento (/share/…).');
+  rateCheck('resolve', req, cfg.rateResolve);
+  const wantSizes = u.searchParams.get('sizes') === '1', ck = `${ig.canonical}|${wantSizes ? 1 : 0}`, hit = IG_INFO_CACHE.get(ck);
+  if (hit && Date.now() - hit.t < IG_INFO_TTL_MS) return json(200, { ...hit.body, requestId: id, cached: true });
+  const d = await cobaltCall(cfg, { url: ig.canonical, downloadMode: 'auto', videoQuality: 'max', filenameStyle: 'classic' }, id, igCobaltError);
+  const { items, warnings } = igItems(cfg, d);
+  if (!items.length) throw new ProxyError(422, 'IG_NO_MEDIA', 'cobalt', 'O Cobalt não devolveu nenhum arquivo baixável para este link do Instagram.', { details: { warnings } });
+  if (wantSizes) await Promise.all(items.map(async it => { it.size = await tunnelHeaders(cfg, it.url, id); }));
+  const base = `Instagram-${ig.code}`, total = items.length, options = [];
+  for (const it of items) {
+    const fileBase = total > 1 ? `${base}-${it.i + 1}` : base;
+    const token = await seal(cfg, { k: 'ig', u: ig.canonical, i: it.i, t: it.type, n: fileBase });
+    const ext = it.type === 'photo' ? 'jpg' : 'mp4';
+    options.push({ id: `item-${it.i + 1}`, index: it.i, type: it.type, container: (String(it.filename).match(/\.([a-z0-9]{2,5})$/i) || [])[1]?.toLowerCase() || ext, mime: it.type === 'photo' ? 'image/jpeg' : 'video/mp4',
+      label: it.type === 'photo' ? 'Foto original' : 'Vídeo original', thumbnail: it.thumb || null, fileBase, size: it.size ? { bytes: it.size.bytes, kind: it.size.kind } : null, url: `${u.origin}/ig/dl?t=${token}` });
+  }
+  const body = { ok: true, requestId: id, adapter: 'instagram', id: ig.code, kind: ig.kind, url: ig.canonical, author: ig.author, title: null, duration: null,
+    thumbnail: options.find(o => o.thumbnail)?.thumbnail || null, count: total, options, warnings, expiresIn: cfg.ttl, sources: { metadata: [], download: 'cobalt' } };
+  IG_INFO_CACHE.set(ck, { t: Date.now(), body }); while (IG_INFO_CACHE.size > 16) IG_INFO_CACHE.delete(IG_INFO_CACHE.keys().next().value);
+  return json(200, body);
+}
+
+async function igDownload(cfg, req, u, id) {
+  needCobalt(cfg); rateCheck('resolve', req, cfg.rateResolve * 4);
+  const tokenStr = u.searchParams.get('t') || '', p = await unseal(cfg, tokenStr, ['ig']);
+  const ig = parseInstagram(String(p.u || ''));
+  if (!ig || ig.story || ig.canonical !== p.u || !Number.isInteger(p.i) || p.i < 0 || !['video', 'photo'].includes(p.t)) throw new ProxyError(403, 'BAD_TOKEN', 'auth', 'Token inválido para esta rota.');
+  const resolveCall = async () => {
+    const d = await cobaltCall(cfg, { url: ig.canonical, downloadMode: 'auto', videoQuality: 'max', filenameStyle: 'classic' }, id, igCobaltError);
+    const item = igItems(cfg, d).items.find(it => it.i === p.i);
+    if (!item || item.type !== p.t) throw new ProxyError(410, 'IG_ITEM_CHANGED', 'cobalt', 'O post mudou desde a busca (o item escolhido não existe mais). Busque o link de novo.');
+    const call = { url: item.url, type: item.type };
+    IG_TUNNELS.set(tokenStr, { t: Date.now(), call }); while (IG_TUNNELS.size > 24) IG_TUNNELS.delete(IG_TUNNELS.keys().next().value);
+    return call;
+  };
+  const cached = IG_TUNNELS.get(tokenStr); let reused = Boolean(cached && Date.now() - cached.t < IG_TUNNEL_TTL_MS);
+  let call = reused ? cached.call : await resolveCall();
+  const out = new Headers(CORS);
+  out.set('x-content-type-options', 'nosniff'); out.set('x-optdowns-stage', 'cobalt'); out.set('cache-control', 'no-store');
+  if (u.searchParams.get('probe') === '1') return json(200, { ok: true, probe: true, type: call.type });
+  const baseName = `${String(p.n || `Instagram-${ig.code}`).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').trim().slice(0, 100) || 'Instagram'}`;
+  if (req.method === 'HEAD') { out.set('content-type', p.t === 'photo' ? 'image/jpeg' : 'video/mp4'); out.set('accept-ranges', 'none'); return new Response(null, { status: 200, headers: out }); }
+  const openTunnel = async () => {
+    try { return await fetch(call.url, { redirect: 'manual', headers: { 'accept-encoding': 'identity' }, signal: timeoutSignal(CDN_TIMEOUT_MS) }); }
+    catch (e) { throw ytFetchError(cfg, e, 'cdn', 'Download pelo Cobalt', id); }
+  };
+  let res = await openTunnel();
+  res = await retryTunnel(cfg, res, openTunnel);
+  if (reused && (res.status === 404 || res.status === 410)) { try { await res.body?.cancel(); } catch {} IG_TUNNELS.delete(tokenStr); reused = false; call = await resolveCall(); res = await openTunnel(); }
+  log(id, 'cdn', { host: hostOf(call.url), status: res.status, kind: 'ig' });
+  if (res.status !== 200) {
+    const hintMs = retryAfterMs(res); try { await res.body?.cancel(); } catch {}
+    if (res.status === 404 || res.status === 410) throw new ProxyError(410, 'TUNNEL_EXPIRED', 'cdn', 'O link temporário expirou. Busque o link do Instagram de novo.', { upstreamStatus: res.status });
+    if (res.status === 429) throw rateLimitError(Math.max(hintMs, 15000), 429);
+    if (res.status === 502 || res.status === 503 || res.status === 504) throw new ProxyError(503, 'COBALT_UNAVAILABLE', 'cdn', `O servidor de mídia está indisponível ou sobrecarregado (HTTP ${res.status}).`, { upstreamStatus: res.status, retryAfter: Math.max(5, Math.ceil(hintMs / 1000) || 10), hint: 'O Worker já repetiu com espera progressiva. Aguarde e tente de novo.' });
+    throw new ProxyError(502, 'COBALT_TUNNEL_FAILED', 'cdn', `O servidor de mídia respondeu HTTP ${res.status} ao entregar o arquivo.`, { upstreamStatus: res.status });
+  }
+  const type = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  const wanted = p.t === 'photo' ? /^image\// : /^video\//;
+  if (!wanted.test(type)) { try { await res.body?.cancel(); } catch {} throw new ProxyError(502, 'IG_WRONG_TYPE', 'cdn', `O servidor entregou "${type || 'tipo desconhecido'}" onde era esperado ${p.t === 'photo' ? 'uma imagem' : 'um vídeo'}. Nada foi baixado.`, { hint: 'Busque o link de novo; se persistir, atualize o Cobalt.' }); }
+  const len = Number(res.headers.get('content-length')) || 0, est = Number(res.headers.get('estimated-content-length')) || 0;
+  if (len > cfg.maxBytes || est > cfg.maxBytes) { try { await res.body?.cancel(); } catch {} throw new ProxyError(413, 'TOO_LARGE', 'cdn', 'O arquivo excede o limite configurado no Worker (MAX_BYTES).', { details: { limit: cfg.maxBytes } }); }
+  const ext = IG_MIME_EXT[type] || (p.t === 'photo' ? 'jpg' : 'mp4'), name = `${baseName}.${ext}`;
+  out.set('content-disposition', `attachment; filename="${name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+  out.set('content-type', type);
+  if (len) out.set('content-length', String(len)); out.set('accept-ranges', 'none');
+  if (!len && est) out.set('x-optdowns-estimated-length', String(est));
+  return new Response(res.body ? limitStream(len ? lengthGuard(res.body, len) : res.body, cfg.maxBytes) : null, { status: 200, headers: out });
 }
 
 // ---------------------------------------------------------------------------
@@ -1064,11 +1347,17 @@ export default {
       if (route === '/yt/dl') { return await ytDownload(cfg, req, u, id); }
       if (route === '/yt/info' || route === '/yt/status') {
         if (env.SECRET && u.searchParams.get('key') !== env.SECRET) throw new ProxyError(401, 'BAD_KEY', 'auth', 'Chave inválida ou ausente.');
-        if (route === '/yt/status') { rateCheck('resolve', req, cfg.rateResolve); return await ytStatus(cfg, id); }
+        if (route === '/yt/status') { rateCheck('resolve', req, cfg.rateResolve); return await ytStatus(cfg, id, u); }
         let yurl; try { yurl = new URL(u.searchParams.get('url') || ''); } catch { throw new ProxyError(400, 'BAD_URL', 'validate', 'Parâmetro url ausente ou inválido.'); }
         return await ytInfo(cfg, req, u, yurl, id);
       }
-      if (route !== '/dl' && route !== '/info' && route !== '/tt') throw new ProxyError(404, 'NO_ROUTE', 'validate', 'Use /dl?url=<link>, /tt?url=<link> (TikTok), /info?url=<link> ou /yt/info?url=<link> (YouTube).');
+      if (route === '/ig/dl') { return await igDownload(cfg, req, u, id); }
+      if (route === '/ig/info') {
+        if (env.SECRET && u.searchParams.get('key') !== env.SECRET) throw new ProxyError(401, 'BAD_KEY', 'auth', 'Chave inválida ou ausente.');
+        let iurl; try { iurl = new URL(u.searchParams.get('url') || ''); } catch { throw new ProxyError(400, 'BAD_URL', 'validate', 'Parâmetro url ausente ou inválido.'); }
+        return await igInfo(cfg, req, u, iurl, id);
+      }
+      if (route !== '/dl' && route !== '/info' && route !== '/tt') throw new ProxyError(404, 'NO_ROUTE', 'validate', 'Use /dl?url=<link>, /tt?url=<link> (TikTok), /info?url=<link>, /yt/info?url=<link> (YouTube) ou /ig/info?url=<link> (Instagram).');
       if (env.SECRET && u.searchParams.get('key') !== env.SECRET) throw new ProxyError(401, 'BAD_KEY', 'auth', 'Chave inválida ou ausente.');
       let target;
       try { target = new URL(u.searchParams.get('url') || ''); } catch { throw new ProxyError(400, 'BAD_URL', 'validate', 'Parâmetro url ausente ou inválido.'); }
